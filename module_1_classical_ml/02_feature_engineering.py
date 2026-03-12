@@ -175,7 +175,7 @@ print(f"✓ Feature table created: {feature_table_name}")
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE OR REPLACE FUNCTION {catalog}.{schema}.avg_price_increase(monthly_charges DOUBLE, tenure_months INT)
+CREATE OR REPLACE FUNCTION {catalog}.{schema}.avg_price_increase(monthly_charges DOUBLE, tenure_months BIGINT)
 RETURNS DOUBLE
 LANGUAGE PYTHON
 COMMENT 'Estimates average monthly price increase over customer tenure'
