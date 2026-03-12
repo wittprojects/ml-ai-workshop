@@ -157,7 +157,7 @@ except Exception:
 
 fe.create_table(
     name=feature_table_name,
-    primary_keys=["customer_id"],
+    primary_keys=["customer_id", "update_timestamp"],
     timeseries_columns="update_timestamp",
     df=feature_df,
     description="Customer churn prediction features: demographics, service profile, and ticket aggregates",
