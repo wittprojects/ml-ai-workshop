@@ -166,7 +166,7 @@ try:
             embedding_source_columns=[
                 EmbeddingSourceColumn(
                     name="content",
-                    embedding_model_endpoint_name=embedding_endpoint,
+                    model_endpoint_name=embedding_endpoint,
                 )
             ],
             pipeline_type=PipelineType.TRIGGERED,
