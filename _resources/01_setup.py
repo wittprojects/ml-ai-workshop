@@ -115,12 +115,6 @@ print(f"  Split distribution:\n{labels_pdf['split'].value_counts().to_string()}"
 # COMMAND ----------
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.vectorsearch import (
-    EndpointType,
-    DeltaSyncVectorIndexSpecRequest,
-    EmbeddingSourceColumn,
-    PipelineType,
-)
 
 w = WorkspaceClient()
 
@@ -130,7 +124,7 @@ w = WorkspaceClient()
 try:
     w.vector_search_endpoints.create_endpoint(
         name=vector_search_endpoint,
-        endpoint_type=EndpointType.STANDARD,
+        endpoint_type="STANDARD",
     )
     print(f"✓ Creating vector search endpoint '{vector_search_endpoint}'...")
 except Exception as e:
@@ -153,24 +147,27 @@ print(f"✓ Vector search endpoint '{vector_search_endpoint}' is ONLINE")
 
 # COMMAND ----------
 
-# Create delta sync vector index on product_knowledge
+# Create delta sync vector index on product_knowledge (using REST API for SDK compatibility)
+import requests
+
 source_table = f"{catalog}.{schema}.product_knowledge"
 try:
-    w.vector_search_indexes.create_index(
-        name=product_knowledge_index,
-        endpoint_name=vector_search_endpoint,
-        primary_key="article_id",
-        index_type=PipelineType.TRIGGERED,
-        delta_sync_index_spec=DeltaSyncVectorIndexSpecRequest(
-            source_table=source_table,
-            embedding_source_columns=[
-                EmbeddingSourceColumn(
-                    name="content",
-                    model_endpoint_name=embedding_endpoint,
-                )
-            ],
-            pipeline_type=PipelineType.TRIGGERED,
-        ),
+    w.api_client.do(
+        "POST",
+        "/api/2.0/vector-search/indexes",
+        body={
+            "name": product_knowledge_index,
+            "endpoint_name": vector_search_endpoint,
+            "primary_key": "article_id",
+            "index_type": "DELTA_SYNC",
+            "delta_sync_index_spec": {
+                "source_table": source_table,
+                "embedding_source_columns": [
+                    {"name": "content", "embedding_model_endpoint_name": embedding_endpoint}
+                ],
+                "pipeline_type": "TRIGGERED",
+            },
+        },
     )
     print(f"✓ Creating vector search index '{product_knowledge_index}'...")
 except Exception as e:
