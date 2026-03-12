@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+databricks-sdk
+databricks-langchain
+langgraph>=0.3.4
+mlflow-skinny[databricks]

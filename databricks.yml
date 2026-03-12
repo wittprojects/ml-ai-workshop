@@ -1,0 +1,12 @@
+bundle:
+  name: ml-ai-workshop
+
+workspace:
+  root_path: /Workspace/Users/${workspace.current_user.userName}/ml-ai-workshop
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://fevm-serverless-stable-goo4dg.cloud.databricks.com/

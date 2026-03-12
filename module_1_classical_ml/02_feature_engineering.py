@@ -1,0 +1,198 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Module 1: Classical ML on Databricks
+# MAGIC ## Notebook 02 — Feature Engineering with Feature Store
+# MAGIC
+# MAGIC **Time**: ~10 min
+# MAGIC
+# MAGIC We'll create a **feature table** in Unity Catalog that joins customer profiles with aggregated service ticket features.
+# MAGIC
+# MAGIC Key concepts:
+# MAGIC - Feature Engineering Client (`databricks.feature_engineering`)
+# MAGIC - Feature tables with primary keys and timeseries columns
+# MAGIC - On-demand feature functions
+# MAGIC - Pandas on Spark API for data cleaning
+
+# COMMAND ----------
+
+# MAGIC %run ../_resources/00_config
+
+# COMMAND ----------
+
+from databricks.feature_engineering import FeatureEngineeringClient, FeatureFunction, FeatureLookup
+from pyspark.sql import functions as F
+from pyspark.sql.types import IntegerType
+
+fe = FeatureEngineeringClient()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Build Features from Customers + Service Tickets
+# MAGIC
+# MAGIC We'll aggregate service ticket data per customer and join with customer profiles to create our feature table.
+
+# COMMAND ----------
+
+# Load source tables
+customers = spark.table("customers")
+tickets = spark.table("service_tickets")
+
+# COMMAND ----------
+
+# Aggregate ticket features per customer
+ticket_features = (
+    tickets
+    .groupBy("customer_id")
+    .agg(
+        F.count("ticket_id").alias("total_tickets"),
+        F.sum(F.when(F.col("category") == "billing", 1).otherwise(0)).alias("billing_tickets"),
+        F.sum(F.when(F.col("category") == "technical", 1).otherwise(0)).alias("technical_tickets"),
+        F.sum(F.when(F.col("category") == "cancellation", 1).otherwise(0)).alias("cancellation_tickets"),
+        F.sum(F.when(F.col("priority").isin("high", "critical"), 1).otherwise(0)).alias("high_priority_tickets"),
+        F.avg("resolution_time_hours").alias("avg_resolution_hours"),
+        F.max("created_date").alias("last_ticket_date"),
+    )
+)
+
+display(ticket_features.limit(5))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Count Optional Services
+# MAGIC
+# MAGIC We'll use a **Pandas UDF** to compute how many optional services each customer has enabled.
+
+# COMMAND ----------
+
+import pandas as pd
+from pyspark.sql.functions import pandas_udf
+
+optional_service_cols = [
+    "streaming_tv", "streaming_movies", "online_security",
+    "online_backup", "device_protection", "tech_support"
+]
+
+@pandas_udf(IntegerType())
+def count_optional_services(
+    streaming_tv: pd.Series, streaming_movies: pd.Series,
+    online_security: pd.Series, online_backup: pd.Series,
+    device_protection: pd.Series, tech_support: pd.Series,
+) -> pd.Series:
+    cols = [streaming_tv, streaming_movies, online_security, online_backup, device_protection, tech_support]
+    return sum((col == "Yes").astype(int) for col in cols)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Build the Feature DataFrame
+
+# COMMAND ----------
+
+# Join customers with ticket aggregates and compute derived features
+feature_df = (
+    customers
+    .join(ticket_features, on="customer_id", how="left")
+    .fillna(0, subset=["total_tickets", "billing_tickets", "technical_tickets",
+                        "cancellation_tickets", "high_priority_tickets", "avg_resolution_hours"])
+    .withColumn(
+        "num_optional_services",
+        count_optional_services(*[F.col(c) for c in optional_service_cols])
+    )
+    .withColumn("update_timestamp", F.current_timestamp())
+    .select(
+        "customer_id",
+        "tenure_months",
+        "contract_type",
+        "monthly_charges",
+        "total_charges",
+        "payment_method",
+        "internet_service",
+        "phone_service",
+        "paperless_billing",
+        "partner",
+        "dependents",
+        "senior_citizen",
+        "num_optional_services",
+        "total_tickets",
+        "billing_tickets",
+        "technical_tickets",
+        "cancellation_tickets",
+        "high_priority_tickets",
+        "avg_resolution_hours",
+        "update_timestamp",
+    )
+)
+
+print(f"Feature table rows: {feature_df.count()}")
+display(feature_df.limit(5))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Create Feature Table in Unity Catalog
+# MAGIC
+# MAGIC The `FeatureEngineeringClient` registers this as a managed feature table with lineage tracking.
+
+# COMMAND ----------
+
+# Drop if exists (for re-runnability)
+try:
+    fe.drop_table(name=feature_table_name)
+    print(f"Dropped existing table {feature_table_name}")
+except Exception:
+    pass
+
+# COMMAND ----------
+
+fe.create_table(
+    name=feature_table_name,
+    primary_keys=["customer_id"],
+    timeseries_columns="update_timestamp",
+    df=feature_df,
+    description="Customer churn prediction features: demographics, service profile, and ticket aggregates",
+)
+
+print(f"✓ Feature table created: {feature_table_name}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## On-Demand Feature Function
+# MAGIC
+# MAGIC Create a SQL function that computes `avg_price_increase` at inference time.
+# MAGIC This demonstrates **on-demand features** — computed dynamically rather than pre-materialized.
+
+# COMMAND ----------
+
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {catalog}.{schema}.avg_price_increase(monthly_charges DOUBLE, tenure_months INT)
+RETURNS DOUBLE
+LANGUAGE SQL
+COMMENT 'Estimates average monthly price increase over customer tenure'
+RETURN CASE
+    WHEN tenure_months <= 1 THEN 0.0
+    ELSE ROUND((monthly_charges - 30.0) / tenure_months, 2)
+END
+""")
+
+print(f"✓ On-demand feature function created: {catalog}.{schema}.avg_price_increase")
+
+# COMMAND ----------
+
+# Test the function
+display(spark.sql(f"SELECT {catalog}.{schema}.avg_price_increase(85.50, 12) as price_increase"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Summary
+# MAGIC
+# MAGIC We created:
+# MAGIC - A **feature table** (`churn_feature_table`) with customer demographics + ticket aggregates
+# MAGIC - An **on-demand feature function** (`avg_price_increase`) for dynamic computation
+# MAGIC
+# MAGIC Both are registered in **Unity Catalog** with full lineage tracking.
+# MAGIC
+# MAGIC **Next**: [03 Train Model →](./03_train_model)
