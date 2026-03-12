@@ -19,6 +19,15 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install databricks-sdk==0.50.0 -q
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %run ../_resources/00_config
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## The `agent_app/` Directory
 # MAGIC

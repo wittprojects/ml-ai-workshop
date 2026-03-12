@@ -18,7 +18,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-langchain langgraph mlflow
+# MAGIC %pip install databricks-langchain langgraph mlflow databricks-sdk==0.50.0 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------

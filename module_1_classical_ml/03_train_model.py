@@ -19,6 +19,15 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install databricks-feature-engineering databricks-sdk==0.50.0 optuna lightgbm shap -q
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %run ../_resources/00_config
+
+# COMMAND ----------
+
 import mlflow
 from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup, FeatureFunction
 

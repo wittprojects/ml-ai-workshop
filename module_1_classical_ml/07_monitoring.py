@@ -18,6 +18,15 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install databricks-feature-engineering databricks-sdk==0.50.0 -q
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %run ../_resources/00_config
+
+# COMMAND ----------
+
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import MonitorInferenceLog, MonitorInferenceLogProblemType
 
