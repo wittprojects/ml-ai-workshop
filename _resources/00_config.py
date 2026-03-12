@@ -30,9 +30,12 @@ model_name = f"{catalog}.{schema}.churn_model"
 
 # COMMAND ----------
 
-# Set default catalog and schema for SQL
-spark.sql(f"USE CATALOG {catalog}")
-spark.sql(f"USE SCHEMA {schema}")
+# Set default catalog and schema for SQL (skip if not yet created by setup)
+try:
+    spark.sql(f"USE CATALOG {catalog}")
+    spark.sql(f"USE SCHEMA {schema}")
+except Exception:
+    print(f"Note: catalog '{catalog}' or schema '{schema}' not yet created — run 01_setup first")
 
 print(f"Catalog:            {catalog}")
 print(f"Schema:             {schema}")
