@@ -178,12 +178,13 @@ print(f"✓ Feature table created: {feature_table_name}")
 spark.sql(f"""
 CREATE OR REPLACE FUNCTION {catalog}.{schema}.avg_price_increase(monthly_charges DOUBLE, tenure_months INT)
 RETURNS DOUBLE
-LANGUAGE SQL
+LANGUAGE PYTHON
 COMMENT 'Estimates average monthly price increase over customer tenure'
-RETURN CASE
-    WHEN tenure_months <= 1 THEN 0.0
-    ELSE ROUND((monthly_charges - 30.0) / tenure_months, 2)
-END
+AS $$
+if tenure_months <= 1:
+    return 0.0
+return round((monthly_charges - 30.0) / tenure_months, 2)
+$$
 """)
 
 print(f"✓ On-demand feature function created: {catalog}.{schema}.avg_price_increase")
