@@ -8,7 +8,7 @@
 # COMMAND ----------
 
 # ---- Catalog & Schema ----
-catalog = "ml_ai_workshop"
+catalog = "wittprojects"
 schema = "workshop"
 
 # ---- Foundation Model API Endpoints ----
