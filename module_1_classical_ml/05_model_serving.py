@@ -33,7 +33,6 @@ from databricks.sdk.service.serving import (
     ServedEntityInput,
     AutoCaptureConfigInput,
 )
-from databricks.sdk.service.catalog import OnlineTable, OnlineTableSpec, OnlineTableSpecTriggeredSchedulingPolicy
 import time
 
 w = WorkspaceClient()
@@ -53,41 +52,33 @@ print(f"✓ CDF enabled on {feature_table_name}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Create Lakebase-Backed Online Table
+# MAGIC ## 2. Create Synced Table for Online Serving
 # MAGIC
-# MAGIC The online table provides millisecond-latency lookups for feature serving at inference time.
+# MAGIC A **synced table** (Lakebase-backed) provides millisecond-latency lookups for feature serving at inference time.
+# MAGIC It automatically syncs from the offline Delta feature table.
 
 # COMMAND ----------
 
 online_table_name = f"{feature_table_name}_online"
 
-try:
-    w.online_tables.create(
-        table=OnlineTable(
-            name=online_table_name,
-            spec=OnlineTableSpec(
-                source_table_full_name=feature_table_name,
-                primary_key_columns=["customer_id"],
-                run_triggered=OnlineTableSpecTriggeredSchedulingPolicy(),
-            ),
-        )
-    )
-    print(f"✓ Creating online table '{online_table_name}'...")
-except Exception as e:
-    if "already exists" in str(e).lower():
-        print(f"✓ Online table '{online_table_name}' already exists")
-    else:
-        raise e
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {online_table_name}
+(customer_id STRING NOT NULL PRIMARY KEY)
+TBLPROPERTIES ('delta.enableDeletionVectors' = false)
+AS SYNCED FROM {feature_table_name}
+""")
+print(f"✓ Synced table '{online_table_name}' created")
 
 # COMMAND ----------
 
-# Wait for online table to be ready
-online_table = w.online_tables.get(name=online_table_name)
-while online_table.status.detailed_state.value not in ("ONLINE", "ACTIVE", "ONLINE_TRIGGERED_UPDATE", "ONLINE_NO_PENDING_UPDATE"):
-    print(f"  Status: {online_table.status.detailed_state} — waiting 30s...")
+# Wait for synced table to be ready
+while True:
+    status = spark.sql(f"DESCRIBE EXTENDED {online_table_name}").filter("col_name = 'Synced Table Status'").collect()
+    if status and "ACTIVE" in str(status[0]["data_type"]).upper():
+        break
+    print(f"  Waiting for synced table to become active...")
     time.sleep(30)
-    online_table = w.online_tables.get(name=online_table_name)
-print(f"✓ Online table '{online_table_name}' is ready")
+print(f"✓ Synced table '{online_table_name}' is active")
 
 # COMMAND ----------
 
