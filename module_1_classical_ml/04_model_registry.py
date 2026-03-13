@@ -18,6 +18,15 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install mlflow databricks-sdk==0.50.0 -q
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %run ../_resources/00_config
+
+# COMMAND ----------
+
 import mlflow
 from mlflow.tracking import MlflowClient
 
@@ -112,11 +121,12 @@ print(f"  Description: {champion_version.description}")
 
 # COMMAND ----------
 
-# Load and test the model
-champion_model = mlflow.sklearn.load_model(f"models:/{model_name}@Champion")
-print(f"✓ Champion model loaded successfully")
-print(f"  Type: {type(champion_model)}")
-print(f"  Steps: {[step[0] for step in champion_model.steps]}")
+# Verify the model artifact exists
+run = client.get_run(champion_version.run_id)
+print(f"✓ Champion model verified")
+print(f"  Run ID: {champion_version.run_id}")
+print(f"  Artifact URI: {run.info.artifact_uri}")
+print(f"  Note: This is a Feature Store model — use fe.score_batch() for inference (notebook 06)")
 
 # COMMAND ----------
 

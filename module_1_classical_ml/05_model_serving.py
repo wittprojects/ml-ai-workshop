@@ -33,7 +33,7 @@ from databricks.sdk.service.serving import (
     ServedEntityInput,
     AutoCaptureConfigInput,
 )
-from databricks.sdk.service.catalog import OnlineTableSpec, OnlineTableSpecTriggeredSchedulingPolicy
+from databricks.sdk.service.catalog import OnlineTable, OnlineTableSpec, OnlineTableSpecTriggeredSchedulingPolicy
 import time
 
 w = WorkspaceClient()
@@ -63,12 +63,14 @@ online_table_name = f"{feature_table_name}_online"
 
 try:
     w.online_tables.create(
-        name=online_table_name,
-        spec=OnlineTableSpec(
-            source_table_full_name=feature_table_name,
-            primary_key_columns=["customer_id"],
-            run_triggered=OnlineTableSpecTriggeredSchedulingPolicy(),
-        ),
+        table=OnlineTable(
+            name=online_table_name,
+            spec=OnlineTableSpec(
+                source_table_full_name=feature_table_name,
+                primary_key_columns=["customer_id"],
+                run_triggered=OnlineTableSpecTriggeredSchedulingPolicy(),
+            ),
+        )
     )
     print(f"✓ Creating online table '{online_table_name}'...")
 except Exception as e:

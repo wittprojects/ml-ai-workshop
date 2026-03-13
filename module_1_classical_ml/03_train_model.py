@@ -123,7 +123,7 @@ print(f"Train: {len(X_train)}, Val: {len(X_val)}")
 preprocessor = ColumnTransformer(
     transformers=[
         ("num", StandardScaler(), numerical_cols),
-        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore", sparse=False), categorical_cols),
     ],
     remainder="passthrough",
 )
@@ -257,10 +257,16 @@ all_features = num_features + cat_features
 explainer = shap.TreeExplainer(final_pipeline.named_steps["classifier"])
 shap_values = explainer.shap_values(X_val_processed)
 
+# Handle both old SHAP (list of arrays per class) and new SHAP (single array)
+if isinstance(shap_values, list):
+    shap_values_pos = shap_values[1]
+else:
+    shap_values_pos = shap_values
+
 # COMMAND ----------
 
 # Summary plot — shows top features and their impact direction
-shap.summary_plot(shap_values[1], X_val_processed, feature_names=all_features, show=True)
+shap.summary_plot(shap_values_pos, X_val_processed, feature_names=all_features, show=True)
 
 # COMMAND ----------
 
