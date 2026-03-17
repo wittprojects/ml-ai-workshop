@@ -1,6 +1,10 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
-# MAGIC # Module 1: Classical ML on Databricks
+# MAGIC # Module 1: Machine Learning on Databricks
 # MAGIC ## Notebook 02 — Feature Engineering with Feature Store
 # MAGIC
 # MAGIC **Time**: ~10 min
@@ -11,15 +15,10 @@
 # MAGIC - Feature Engineering Client (`databricks.feature_engineering`)
 # MAGIC - Feature tables with primary keys and timeseries columns
 # MAGIC - On-demand feature functions
-# MAGIC - Pandas on Spark API for data cleaning
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00_config
-
-# COMMAND ----------
-
-# MAGIC %pip install databricks-feature-engineering databricks-sdk==0.50.0 -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -174,24 +173,7 @@ print(f"✓ Feature table created: {feature_table_name}")
 
 # COMMAND ----------
 
-spark.sql(f"""
-CREATE OR REPLACE FUNCTION {catalog}.{schema}.avg_price_increase(monthly_charges DOUBLE, tenure_months BIGINT)
-RETURNS DOUBLE
-LANGUAGE PYTHON
-COMMENT 'Estimates average monthly price increase over customer tenure'
-AS $$
-if tenure_months <= 1:
-    return 0.0
-return round((monthly_charges - 30.0) / tenure_months, 2)
-$$
-""")
-
-print(f"✓ On-demand feature function created: {catalog}.{schema}.avg_price_increase")
-
-# COMMAND ----------
-
-# Test the function
-display(spark.sql(f"SELECT {catalog}.{schema}.avg_price_increase(85.50, 12) as price_increase"))
+###TODO
 
 # COMMAND ----------
 

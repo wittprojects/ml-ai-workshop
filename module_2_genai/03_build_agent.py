@@ -24,7 +24,6 @@
 
 # COMMAND ----------
 
-# Re-run config after Python restart
 # MAGIC %run ../_resources/00_config
 
 # COMMAND ----------
@@ -42,17 +41,25 @@ from langgraph.prebuilt import create_react_agent
 # LLM
 llm = ChatDatabricks(endpoint=llm_endpoint)
 
-# UC Function tools
-uc_toolkit = UCFunctionToolkit(
-    function_names=[
-        f"{catalog}.{schema}.get_latest_ticket",
-        f"{catalog}.{schema}.get_customer_profile",
-        f"{catalog}.{schema}.get_ticket_history",
-        f"{catalog}.{schema}.get_retention_policy",
-        f"{catalog}.{schema}.get_churn_risk",
-    ]
-)
-uc_tools = uc_toolkit.tools
+# UC Function tools — load available tools, skip any that don't exist yet
+uc_function_names = [
+    f"{catalog}.{schema}.get_latest_ticket",
+    f"{catalog}.{schema}.get_customer_profile",
+    f"{catalog}.{schema}.get_ticket_history",
+    f"{catalog}.{schema}.get_retention_policy",
+    f"{catalog}.{schema}.get_churn_risk",
+]
+
+loaded_names = []
+for fn in uc_function_names:
+    try:
+        UCFunctionToolkit(function_names=[fn])
+        loaded_names.append(fn)
+    except Exception as e:
+        print(f"  Skipping {fn.split('.')[-1]}: {e}")
+
+uc_toolkit = UCFunctionToolkit(function_names=loaded_names) if loaded_names else None
+uc_tools = uc_toolkit.tools if uc_toolkit else []
 
 # Vector search tool
 vs_tool = VectorSearchRetrieverTool(

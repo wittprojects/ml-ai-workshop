@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 1: Classical ML on Databricks
 # MAGIC ## Notebook 03 — Model Training with Optuna + MLflow
@@ -15,11 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00_config
-
-# COMMAND ----------
-
-# MAGIC %pip install databricks-feature-engineering databricks-sdk==0.50.0 optuna lightgbm shap -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 optuna lightgbm shap -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -203,6 +203,9 @@ final_pipeline = Pipeline([
     ("classifier", lgb.LGBMClassifier(**best_params, random_state=42, verbose=-1)),
 ])
 
+# Create a null-free input example for model logging
+input_example = X_train.dropna().head(5)
+
 with mlflow.start_run(run_name="final_model") as run:
     final_pipeline.fit(X_train, y_train)
 
@@ -227,6 +230,7 @@ with mlflow.start_run(run_name="final_model") as run:
         artifact_path="model",
         flavor=mlflow.sklearn,
         training_set=training_set,
+        input_example=input_example,
         registered_model_name=None,  # We'll register in the next notebook
     )
 

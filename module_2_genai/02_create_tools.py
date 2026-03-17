@@ -52,9 +52,7 @@ print(f"✓ Created {catalog}.{schema}.get_latest_ticket()")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Test
-# MAGIC SELECT * FROM ml_ai_workshop.workshop.get_latest_ticket()
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.get_latest_ticket()"))
 
 # COMMAND ----------
 
@@ -79,9 +77,7 @@ print(f"✓ Created {catalog}.{schema}.get_customer_profile()")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Test
-# MAGIC SELECT * FROM ml_ai_workshop.workshop.get_customer_profile('CUST-00001')
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.get_customer_profile('CUST-00001')"))
 
 # COMMAND ----------
 
@@ -110,9 +106,7 @@ print(f"✓ Created {catalog}.{schema}.get_ticket_history()")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Test
-# MAGIC SELECT * FROM ml_ai_workshop.workshop.get_ticket_history('CUST-00001')
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.get_ticket_history('CUST-00001')"))
 
 # COMMAND ----------
 
@@ -136,9 +130,7 @@ print(f"✓ Created {catalog}.{schema}.get_retention_policy()")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Test
-# MAGIC SELECT * FROM ml_ai_workshop.workshop.get_retention_policy()
+display(spark.sql(f"SELECT * FROM {catalog}.{schema}.get_retention_policy()"))
 
 # COMMAND ----------
 
@@ -149,25 +141,30 @@ print(f"✓ Created {catalog}.{schema}.get_retention_policy()")
 
 # COMMAND ----------
 
-spark.sql(f"""
-CREATE OR REPLACE FUNCTION {catalog}.{schema}.get_churn_risk(customer_id_param STRING)
-RETURNS STRING
-LANGUAGE SQL
-COMMENT 'Calls the churn prediction model serving endpoint and returns the churn risk prediction for a given customer_id.'
-RETURN
-  SELECT ai_query(
-    '{churn_model_serving_endpoint}',
-    named_struct('customer_id', customer_id_param)
-  )
-""")
-
-print(f"✓ Created {catalog}.{schema}.get_churn_risk()")
+try:
+    spark.sql(f"""
+    CREATE OR REPLACE FUNCTION {catalog}.{schema}.get_churn_risk(customer_id_param STRING)
+    RETURNS STRING
+    LANGUAGE SQL
+    COMMENT 'Calls the churn prediction model serving endpoint and returns the churn risk prediction for a given customer_id.'
+    RETURN
+      SELECT ai_query(
+        '{churn_model_serving_endpoint}',
+        named_struct('customer_id', customer_id_param)
+      )
+    """)
+    print(f"✓ Created {catalog}.{schema}.get_churn_risk()")
+except Exception as e:
+    print(f"Note: get_churn_risk creation skipped — serving endpoint '{churn_model_serving_endpoint}' not active yet")
+    print(f"  Run Module 1 notebook 05 first, then re-run this cell")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Test (requires the serving endpoint from Module 1 to be active)
-# MAGIC SELECT ml_ai_workshop.workshop.get_churn_risk('CUST-00001') as churn_risk
+# Test (requires the serving endpoint from Module 1 to be active)
+try:
+    display(spark.sql(f"SELECT {catalog}.{schema}.get_churn_risk('CUST-00001') as churn_risk"))
+except Exception as e:
+    print(f"Note: get_churn_risk test skipped — serving endpoint not active")
 
 # COMMAND ----------
 
@@ -209,8 +206,11 @@ functions = [
 ]
 
 for func in functions:
-    spark.sql(f"GRANT EXECUTE ON FUNCTION {catalog}.{schema}.{func} TO `account users`")
-    print(f"  ✓ EXECUTE granted on {func}")
+    try:
+        spark.sql(f"GRANT EXECUTE ON FUNCTION {catalog}.{schema}.{func} TO `account users`")
+        print(f"  ✓ EXECUTE granted on {func}")
+    except Exception as e:
+        print(f"  ⊘ Skipped {func} (not yet created)")
 
 # COMMAND ----------
 

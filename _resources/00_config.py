@@ -22,11 +22,15 @@ product_knowledge_index = f"{catalog}.{schema}.product_knowledge_index"
 # ---- Model Serving ----
 churn_model_serving_endpoint = "workshop-churn-model"
 
+# ---- Lakebase Online Store ----
+online_store_name = "workshop-online-store"
+
 # COMMAND ----------
 
 # Derived references (do not edit)
 feature_table_name = f"{catalog}.{schema}.churn_feature_table"
 model_name = f"{catalog}.{schema}.churn_model"
+feature_spec_name = f"{catalog}.{schema}.churn_feature_spec"
 
 # COMMAND ----------
 
