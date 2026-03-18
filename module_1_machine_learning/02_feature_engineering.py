@@ -196,4 +196,4 @@ print(f"✓ On-demand feature function created: {catalog}.{schema}.avg_price_inc
 # MAGIC
 # MAGIC Both are registered in **Unity Catalog** with full lineage tracking.
 # MAGIC
-# MAGIC **Next**: [03 Train Model →](./03_train_model)
+# MAGIC **Next**: [03 Train Model →](./03_train_and_register_model)

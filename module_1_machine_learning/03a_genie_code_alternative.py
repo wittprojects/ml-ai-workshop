@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Module 1: Classical ML on Databricks
+# MAGIC # Module 1: Machine Learning on Databricks
 # MAGIC ## Notebook 03a — Genie Code Alternative Track
 # MAGIC
 # MAGIC **Time**: Self-paced
@@ -127,4 +127,4 @@
 # MAGIC **Both approaches produce the same output**: a registered MLflow model with Feature Store lineage.
 # MAGIC The best approach depends on your use case and experience level.
 # MAGIC
-# MAGIC **Next**: [04 Model Registry →](./04_model_registry)
+# MAGIC **Next**: [05 Model Serving →](./05_model_serving)

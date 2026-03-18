@@ -2,7 +2,7 @@
 Telecom Customer Retention Agent
 
 LangGraph agent with UC function tools and vector search.
-Extracted from module_2_genai/03_build_agent.py for deployment as a Databricks App.
+Extracted from module_2_genai/03_build_and_deploy_agent.py for deployment as a Databricks App.
 """
 
 import os

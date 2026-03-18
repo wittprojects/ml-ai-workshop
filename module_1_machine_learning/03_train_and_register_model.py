@@ -4,7 +4,7 @@
 # environment_version = "5"
 # ///
 # MAGIC %md
-# MAGIC # Module 1: Classical ML on Databricks
+# MAGIC # Module 1: Machine Learning on Databricks
 # MAGIC ## Notebook 03 — Model Training with Optuna + MLflow
 # MAGIC
 # MAGIC **Time**: ~15 min
@@ -374,4 +374,4 @@ print(f"Best run_id saved: {final_run_id}")
 # MAGIC - **Feature Store** lineage preserved via `fe.log_model()`
 # MAGIC - **SHAP** revealed the most important churn drivers
 # MAGIC
-# MAGIC **Next**: [03a Genie Code Alternative →](./03a_genie_code_alternative) or [04 Model Registry →](./04_model_registry)
+# MAGIC **Next**: [03a Genie Code Alternative →](./03a_genie_code_alternative) or [05 Model Serving →](./05_model_serving)

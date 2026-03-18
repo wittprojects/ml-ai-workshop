@@ -4,7 +4,7 @@
 # environment_version = "5"
 # ///
 # MAGIC %md
-# MAGIC # Module 1: Classical ML on Databricks
+# MAGIC # Module 1: Machine Learning on Databricks
 # MAGIC ## Notebook 06 — Batch Inference
 # MAGIC
 # MAGIC **Time**: ~5 min

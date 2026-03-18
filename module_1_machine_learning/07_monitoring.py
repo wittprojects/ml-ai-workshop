@@ -4,7 +4,7 @@
 # environment_version = "5"
 # ///
 # MAGIC %md
-# MAGIC # Module 1: Classical ML on Databricks
+# MAGIC # Module 1: Machine Learning on Databricks
 # MAGIC ## Notebook 07 — Lakehouse Monitoring
 # MAGIC
 # MAGIC **Time**: ~5 min
@@ -136,20 +136,21 @@ except Exception as e:
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Profile metrics (may take a minute to populate after first refresh)
-# MAGIC SELECT column_name, median, percent_nan, min
-# MAGIC FROM wittprojects.workshop.churn_predictions_profile_metrics
-# MAGIC -- WHERE metric_name IN ('count', 'mean', 'stddev', 'min', 'max')
-# MAGIC LIMIT 20
+# Profile metrics (may take a minute to populate after first refresh)
+display(spark.sql(f"""
+SELECT column_name, median, percent_nan, min
+FROM {catalog}.{schema}.churn_predictions_profile_metrics
+LIMIT 20
+"""))
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Drift metrics
-# MAGIC SELECT column_name, metric_name, metric_value
-# MAGIC FROM ml_ai_workshop.workshop.churn_predictions_drift_metrics
-# MAGIC LIMIT 20
+# Drift metrics
+display(spark.sql(f"""
+SELECT column_name, metric_name, metric_value
+FROM {catalog}.{schema}.churn_predictions_drift_metrics
+LIMIT 20
+"""))
 
 # COMMAND ----------
 

@@ -260,4 +260,4 @@ display(improved_results.tables["eval_results"])
 # MAGIC - **Custom scorer**: retention_quality with domain-specific guidelines
 # MAGIC - **Two versions compared** to measure improvement from prompt changes
 # MAGIC
-# MAGIC **Next**: [06 Deploy to Apps →](./06_deploy_to_apps)
+# MAGIC **Congratulations!** You've completed Module 2. You now have an evaluated, deployed GenAI agent built entirely on Databricks.

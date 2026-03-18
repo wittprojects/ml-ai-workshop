@@ -17,9 +17,8 @@
 # MAGIC | 02 Feature Engineering | Feature Store with Unity Catalog |
 # MAGIC | 03 Train Model | LightGBM + Optuna hyperparameter tuning |
 # MAGIC | 03a Genie Code | Alternative: build a model conversationally |
-# MAGIC | 04 Model Registry | Unity Catalog model registration & aliases |
 # MAGIC | 05 Model Serving | Online tables + real-time serving endpoint |
-# MAGIC | 06 Batch Inference | `fe.score_batch()` + `ai_query()` |
+# MAGIC | 06 Batch Inference | `fe.score_batch()` |
 # MAGIC | 07 Monitoring | Lakehouse Monitoring for drift detection |
 # MAGIC
 # MAGIC ### Cross-Module Data Flow
