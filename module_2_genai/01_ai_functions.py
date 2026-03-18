@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 2: GenAI Development & Deployment
 # MAGIC ## Notebook 01 — AI Functions
@@ -36,31 +40,15 @@
 
 # Quick test of FMAPI via Python SDK
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
 w = WorkspaceClient()
 response = w.serving_endpoints.query(
     name=llm_endpoint,
-    messages=[{"role": "user", "content": "In one sentence, what causes customer churn in telecom?"}],
+    messages=[ChatMessage(role=ChatMessageRole.USER, content="In one sentence, what causes customer churn in telecom?")],
     max_tokens=100,
 )
 print(response.choices[0].message.content)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## `ai_sentiment()` — Built-in Sentiment Analysis
-# MAGIC
-# MAGIC The simplest AI Function: no model name, no prompt — just pass text and get sentiment.
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   transcript_id,
-# MAGIC   SUBSTRING(transcript_text, 1, 100) as transcript_preview,
-# MAGIC   ai_sentiment(transcript_text) as sentiment
-# MAGIC FROM call_transcripts
-# MAGIC LIMIT 10
 
 # COMMAND ----------
 
@@ -71,11 +59,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Classify Call Intent
-
-# COMMAND ----------
-
+# DBTITLE 1,Classification
 # MAGIC %sql
 # MAGIC SELECT
 # MAGIC   transcript_id,
@@ -93,11 +77,7 @@ print(response.choices[0].message.content)
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Summarize Call Transcripts
-
-# COMMAND ----------
-
+# DBTITLE 1,Summarize Call Transcripts
 # MAGIC %sql
 # MAGIC SELECT
 # MAGIC   transcript_id,
@@ -141,6 +121,23 @@ print(response.choices[0].message.content)
 # MAGIC FROM customers c
 # MAGIC WHERE c.churn = 'Yes'
 # MAGIC LIMIT 3
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## `ai_sentiment()` — Built-in Sentiment Analysis
+# MAGIC
+# MAGIC The simplest AI Function: no model name, no prompt — just pass text and get sentiment.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   transcript_id,
+# MAGIC   SUBSTRING(transcript_text, 1, 100) as transcript_preview,
+# MAGIC   ai_analyze_sentiment(transcript_text) as sentiment
+# MAGIC FROM call_transcripts
+# MAGIC LIMIT 10
 
 # COMMAND ----------
 

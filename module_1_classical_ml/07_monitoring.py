@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 1: Classical ML on Databricks
 # MAGIC ## Notebook 07 — Lakehouse Monitoring
@@ -14,11 +18,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00_config
-
-# COMMAND ----------
-
-# MAGIC %pip install databricks-feature-engineering databricks-sdk==0.50.0 mlflow -q
+# MAGIC %pip install databricks-feature-engineering>=0.14.0 databricks-sdk>=0.50.0 mlflow -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -57,15 +57,15 @@ from databricks.feature_engineering import FeatureEngineeringClient
 fe = FeatureEngineeringClient()
 
 # Score training set to create baseline
-train_labels = spark.table("churn_labels").filter("split = 'train'").select("customer_id")
-baseline = fe.score_batch(
-    model_uri=f"models:/{model_name}@Champion",
-    df=train_labels,
-)
+# train_labels = spark.table("churn_labels").filter("split = 'train'").select("customer_id")
+# baseline = fe.score_batch(
+#     model_uri=f"models:/{model_name}@Champion",
+#     df=train_labels,
+# )
 
-baseline_table = f"{catalog}.{schema}.churn_predictions_baseline"
-baseline.write.mode("overwrite").saveAsTable(baseline_table)
-print(f"✓ Baseline table created: {baseline_table} ({spark.table(baseline_table).count()} rows)")
+baseline_table = f"{catalog}.{schema}.churn_predictions"
+# baseline.write.mode("overwrite").saveAsTable(baseline_table)
+# print(f"✓ Baseline table created: {baseline_table} ({spark.table(baseline_table).count()} rows)")
 
 # COMMAND ----------
 
@@ -75,6 +75,18 @@ print(f"✓ Baseline table created: {baseline_table} ({spark.table(baseline_tabl
 # COMMAND ----------
 
 monitor_name = predictions_table
+username = spark.sql("SELECT current_user()").first()[0]
+
+# Add required columns if they don't exist
+existing_cols = spark.table(predictions_table).columns
+if "inference_timestamp" not in existing_cols:
+    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (inference_timestamp TIMESTAMP)")
+    spark.sql(f"UPDATE {predictions_table} SET inference_timestamp = current_timestamp()")
+    print("Added inference_timestamp column")
+if "model_id" not in existing_cols:
+    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (model_id STRING)")
+    spark.sql(f"UPDATE {predictions_table} SET model_id = '{model_name}'")
+    print("Added model_id column")
 
 try:
     w.quality_monitors.create(
@@ -82,12 +94,14 @@ try:
         inference_log=MonitorInferenceLog(
             problem_type=MonitorInferenceLogProblemType.PROBLEM_TYPE_CLASSIFICATION,
             prediction_col="prediction",
-            label_col=None,  # Labels may not be available at inference time
-            model_id_col=None,
-            timestamp_col=None,
+            label_col=None,
+            model_id_col="model_id",
+            timestamp_col="inference_timestamp",
+            granularities=["1 day"],
         ),
         baseline_table_name=baseline_table,
         output_schema_name=f"{catalog}.{schema}",
+        assets_dir=f"/Workspace/Users/{username}/databricks_lakehouse_monitoring/{predictions_table}",
     )
     print(f"✓ Monitor created for {monitor_name}")
 except Exception as e:
@@ -124,9 +138,9 @@ except Exception as e:
 
 # MAGIC %sql
 # MAGIC -- Profile metrics (may take a minute to populate after first refresh)
-# MAGIC SELECT column_name, metric_name, metric_value
-# MAGIC FROM ml_ai_workshop.workshop.churn_predictions_profile_metrics
-# MAGIC WHERE metric_name IN ('count', 'mean', 'stddev', 'min', 'max')
+# MAGIC SELECT column_name, median, percent_nan, min
+# MAGIC FROM wittprojects.workshop.churn_predictions_profile_metrics
+# MAGIC -- WHERE metric_name IN ('count', 'mean', 'stddev', 'min', 'max')
 # MAGIC LIMIT 20
 
 # COMMAND ----------
@@ -159,24 +173,3 @@ except Exception as e:
 # MAGIC - **Databricks SQL Alerts** — automated threshold-based notifications
 # MAGIC - **Workflows** — trigger retraining pipelines on drift detection
 # MAGIC - **Dashboards** — visual monitoring in Databricks SQL
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Module 1 Complete! 🎉
-# MAGIC
-# MAGIC We built an end-to-end ML pipeline:
-# MAGIC
-# MAGIC | Step | What We Did |
-# MAGIC |------|-------------|
-# MAGIC | 01 Overview | Explored the data and ML Runtime |
-# MAGIC | 02 Feature Engineering | Created feature table in Unity Catalog |
-# MAGIC | 03 Train Model | LightGBM + Optuna tuning + MLflow tracking |
-# MAGIC | 04 Model Registry | Registered to UC with Champion alias |
-# MAGIC | 05 Model Serving | Online tables + serving endpoint |
-# MAGIC | 06 Batch Inference | `fe.score_batch()` + `ai_query()` |
-# MAGIC | 07 Monitoring | Lakehouse Monitoring for drift detection |
-# MAGIC
-# MAGIC **The serving endpoint is now live** and will be used as a tool in Module 2's retention agent.
-# MAGIC
-# MAGIC **Next**: [Module 2: GenAI Development →](../module_2_genai/01_ai_functions)

@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 2: GenAI Development & Deployment
 # MAGIC ## Notebook 05 — Agent Evaluation
@@ -15,11 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00_config
-
-# COMMAND ----------
-
-# MAGIC %pip install databricks-langchain langgraph "mlflow[genai]" databricks-sdk==0.50.0 -q
+# MAGIC %pip install databricks-langchain langgraph "mlflow[genai]" databricks-sdk>=0.50.0 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -36,7 +36,7 @@ mlflow.set_experiment(experiment_path)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Rebuild the Agent
+# MAGIC ## Build an Agent
 
 # COMMAND ----------
 
@@ -156,10 +156,14 @@ retention_guidelines = Guidelines(
 # Run evaluation
 mlflow.langchain.autolog()
 
+# Wrap inputs to match predict_fn parameter name
+eval_data_wrapped = eval_data.copy()
+eval_data_wrapped["inputs"] = eval_data_wrapped["inputs"].apply(lambda x: {"inputs": x})
+
 with mlflow.start_run(run_name="agent_eval_v1"):
     eval_results = mlflow.genai.evaluate(
         predict_fn=predict_fn,
-        data=eval_data,
+        data=eval_data_wrapped,
         scorers=[
             RelevanceToQuery(),
             Safety(),
@@ -218,7 +222,7 @@ def improved_predict_fn(inputs):
 with mlflow.start_run(run_name="agent_eval_v2_improved"):
     improved_results = mlflow.genai.evaluate(
         predict_fn=improved_predict_fn,
-        data=eval_data,
+        data=eval_data_wrapped,
         scorers=[
             RelevanceToQuery(),
             Safety(),

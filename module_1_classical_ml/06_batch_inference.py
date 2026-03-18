@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 1: Classical ML on Databricks
 # MAGIC ## Notebook 06 — Batch Inference
@@ -7,15 +11,11 @@
 # MAGIC
 # MAGIC Two approaches to batch scoring:
 # MAGIC 1. **Python**: `fe.score_batch()` with Feature Store lineage
-# MAGIC 2. **SQL**: `ai_query()` calling the serving endpoint (bridges to Module 2)
+# MAGIC
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00_config
-
-# COMMAND ----------
-
-# MAGIC %pip install databricks-feature-engineering databricks-sdk==0.50.0 mlflow -q
+# MAGIC %pip install databricks-feature-engineering>=0.14.0 databricks-sdk>=0.50.0 lightgbm mlflow -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -64,40 +64,3 @@ display(batch_predictions.limit(10))
 
 print(f"✓ Predictions saved to {catalog}.{schema}.churn_predictions")
 print(f"  Total predictions: {spark.table(f'{catalog}.{schema}.churn_predictions').count()}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Approach 2: `ai_query()` (SQL)
-# MAGIC
-# MAGIC `ai_query()` calls the serving endpoint from SQL — great for dashboards and pipelines.
-# MAGIC This bridges to Module 2 where we'll use AI Functions extensively.
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC -- Score customers using ai_query() against the serving endpoint
-# MAGIC SELECT
-# MAGIC   customer_id,
-# MAGIC   ai_query(
-# MAGIC     'workshop-churn-model',
-# MAGIC     named_struct('customer_id', customer_id)
-# MAGIC   ) as churn_prediction
-# MAGIC FROM churn_labels
-# MAGIC WHERE split = 'test'
-# MAGIC LIMIT 10
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Compare Approaches
-# MAGIC
-# MAGIC | Aspect | `fe.score_batch()` | `ai_query()` |
-# MAGIC |--------|-------------------|--------------|
-# MAGIC | Language | Python | SQL |
-# MAGIC | Feature lookup | Automatic (Feature Store) | Via serving endpoint |
-# MAGIC | Lineage | Full lineage tracking | Endpoint-level tracking |
-# MAGIC | Use case | ML pipelines, batch jobs | Dashboards, SQL pipelines |
-# MAGIC | Latency | Batch (Spark) | Per-row (endpoint call) |
-# MAGIC
-# MAGIC **Next**: [07 Monitoring →](./07_monitoring)

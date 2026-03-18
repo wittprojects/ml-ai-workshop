@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 2: GenAI Development & Deployment
 # MAGIC ## Notebook 02 — Create Agent Tools
@@ -15,11 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../_resources/00_config
-
-# COMMAND ----------
-
-# MAGIC %pip install databricks-langchain databricks-sdk==0.50.0 -q
+# MAGIC %pip install databricks-langchain databricks-sdk>=0.50.0 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------

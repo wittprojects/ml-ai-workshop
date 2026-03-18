@@ -168,12 +168,22 @@ print(f"✓ Feature table created: {feature_table_name}")
 # MAGIC %md
 # MAGIC ## On-Demand Feature Function
 # MAGIC
-# MAGIC Create a SQL function that computes `avg_price_increase` at inference time.
-# MAGIC This demonstrates **on-demand features** — computed dynamically rather than pre-materialized.
 
 # COMMAND ----------
 
-###TODO
+# Drop existing function (may be a different language, preventing CREATE OR REPLACE)
+spark.sql(f"DROP FUNCTION IF EXISTS {catalog}.{schema}.avg_price_increase")
+
+spark.sql(f"""
+CREATE FUNCTION {catalog}.{schema}.avg_price_increase(monthly_charges DOUBLE, tenure_months BIGINT)
+RETURNS DOUBLE
+LANGUAGE PYTHON
+COMMENT 'Computes the average monthly price increase over tenure. Used as an on-demand feature at training and serving time.'
+AS $$
+return monthly_charges / tenure_months if tenure_months and tenure_months > 0 else 0.0
+$$
+""")
+print(f"✓ On-demand feature function created: {catalog}.{schema}.avg_price_increase")
 
 # COMMAND ----------
 

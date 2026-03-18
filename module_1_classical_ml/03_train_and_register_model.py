@@ -19,7 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 optuna lightgbm shap -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 optuna lightgbm shap uv -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -64,11 +64,12 @@ feature_lookups = [
 ]
 
 # Create training set
+# Exclude split — it's a label-side column, not a serving input
 training_set = fe.create_training_set(
     df=labels_df,
     feature_lookups=feature_lookups,
     label="churn",
-    exclude_columns=["customer_id", "label_date", "update_timestamp"],
+    exclude_columns=["customer_id", "label_date", "update_timestamp", "split"],
 )
 
 training_df = training_set.load_df()
@@ -97,16 +98,18 @@ pdf = training_df.toPandas()
 # Encode target
 le = LabelEncoder()
 y = le.fit_transform(pdf["churn"])  # Yes=1, No=0
-X = pdf.drop(columns=["churn", "split"])
+X = pdf.drop(columns=["churn"], errors='ignore')
 
 print(f"Features: {X.shape[1]}, Samples: {X.shape[0]}")
 print(f"Target distribution: {pd.Series(y).value_counts().to_dict()}")
 
 # COMMAND ----------
 
-# Split using the pre-assigned split column from labels
-train_mask = pdf["split"] == "train"
-X_train, X_val = X[train_mask].drop(columns=["split"], errors="ignore"), X[~train_mask].drop(columns=["split"], errors="ignore")
+# Get the split column from the original labels (excluded from training_set)
+split_series = labels_df.select("split").toPandas()["split"]
+train_mask = split_series == "train"
+
+X_train, X_val = X[train_mask], X[~train_mask]
 y_train, y_val = y[train_mask], y[~train_mask]
 
 # Identify column types
@@ -123,7 +126,7 @@ print(f"Train: {len(X_train)}, Val: {len(X_val)}")
 preprocessor = ColumnTransformer(
     transformers=[
         ("num", StandardScaler(), numerical_cols),
-        ("cat", OneHotEncoder(handle_unknown="ignore", sparse=False), categorical_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
     ],
     remainder="passthrough",
 )
@@ -203,8 +206,9 @@ final_pipeline = Pipeline([
     ("classifier", lgb.LGBMClassifier(**best_params, random_state=42, verbose=-1)),
 ])
 
-# Create a null-free input example for model logging
-input_example = X_train.dropna().head(5)
+# For Feature Store models, the input_example should contain only the lookup keys
+# since the endpoint handles feature retrieval from the online table automatically
+input_example = labels_df.select("customer_id").limit(5).toPandas()
 
 with mlflow.start_run(run_name="final_model") as run:
     final_pipeline.fit(X_train, y_train)
@@ -225,17 +229,71 @@ with mlflow.start_run(run_name="final_model") as run:
         print(f"  {k}: {v:.4f}")
 
     # Log with Feature Engineering client for lineage
+    # Override pyarrow pin from cluster env to avoid conflict with databricks-feature-lookup at serving time
     fe.log_model(
         model=final_pipeline,
-        artifact_path="model",
+        artifact_path="final_model",
         flavor=mlflow.sklearn,
         training_set=training_set,
         input_example=input_example,
-        registered_model_name=None,  # We'll register in the next notebook
+        extra_pip_requirements=["pyarrow>=16"],
+        registered_model_name=None,  # Registration happens in the cell below
     )
 
     final_run_id = run.info.run_id
     print(f"\nModel logged: run_id={final_run_id}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Smoke test model before registration
+# Smoke test: validate the model loads and produces predictions
+# Note: mlflow.models.predict() can't be used with Feature Store models because
+# the local subprocess can't connect to the online store for feature lookups.
+# Use fe.score_batch() instead — it resolves features from the offline table via Spark.
+test_df = spark.createDataFrame([("CUST-00001",)], ["customer_id"])
+predictions = fe.score_batch(
+    model_uri=f"runs:/{final_run_id}/final_model",
+    df=test_df,
+)
+print("✓ Smoke test passed!")
+display(predictions)
+
+# COMMAND ----------
+
+# DBTITLE 1,Register model header
+# MAGIC %md
+# MAGIC ## Register Model to Unity Catalog
+# MAGIC
+# MAGIC Register directly from the training run to ensure we're registering the model we just trained — not a stale historical run.
+
+# COMMAND ----------
+
+# DBTITLE 1,Register and promote model
+from mlflow.tracking import MlflowClient
+
+mlflow.set_registry_uri("databricks-uc")
+mlflow_client = MlflowClient()
+
+# Register the model from the training run
+model_uri = f"runs:/{final_run_id}/final_model"
+mv = mlflow.register_model(model_uri=model_uri, name=model_name)
+print(f"✓ Registered model: {model_name} v{mv.version}")
+
+# Set description and tags
+mlflow_client.update_model_version(
+    name=model_name,
+    version=mv.version,
+    description=f"LightGBM churn prediction model. F1={metrics['f1_score']:.4f}, AUC={metrics['roc_auc']:.4f}. "
+                f"Trained with Optuna hyperparameter tuning (20 trials)."
+)
+mlflow_client.set_model_version_tag(name=model_name, version=mv.version, key="f1_score", value=f"{metrics['f1_score']:.4f}")
+mlflow_client.set_model_version_tag(name=model_name, version=mv.version, key="roc_auc", value=f"{metrics['roc_auc']:.4f}")
+mlflow_client.set_model_version_tag(name=model_name, version=mv.version, key="training_framework", value="lightgbm+optuna")
+
+# Promote to Champion
+mlflow_client.set_registered_model_alias(name=model_name, alias="Challenger", version=mv.version)
+mlflow_client.set_registered_model_alias(name=model_name, alias="Champion", version=mv.version)
+print(f"✓ Version {mv.version} promoted to 'Champion'")
 
 # COMMAND ----------
 
