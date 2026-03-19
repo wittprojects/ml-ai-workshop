@@ -23,7 +23,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 lightgbm==4.6.0 mlflow==3.8.1 uv -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 mlflow -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -41,18 +41,24 @@ from databricks.sdk.service.catalog import (
 )
 from databricks.feature_engineering import FeatureEngineeringClient
 from pyspark.sql import functions as F
+import mlflow
+from mlflow.tracking import MlflowClient
 import time
 
 w = WorkspaceClient()
 fe = FeatureEngineeringClient()
+mlflow.set_registry_uri("databricks-uc")
+mlflow_client = MlflowClient()
 
 predictions_table = f"{catalog}.{schema}.churn_predictions"
+spark.sql(f"ALTER TABLE {predictions_table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+
 baseline_table = f"{catalog}.{schema}.churn_predictions_baseline"
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC
+# Model ID for monitoring must match the serving endpoint's model identifier
+# Format: <model_name> version <version> (matches inference table convention)
+champion_version = mlflow_client.get_model_version_by_alias(model_name, "Champion").version
+monitor_model_id = f"{model_name} version {champion_version}"
 
 # COMMAND ----------
 
@@ -71,14 +77,13 @@ train_labels = spark.table("churn_labels").filter("split = 'train'").select("cus
 baseline_df = fe.score_batch(
     model_uri=f"models:/{model_name}@Champion",
     df=train_labels,
-    env_manager="uv"
 )
 
 # Add monitoring columns — fixed timestamp for the baseline window
 baseline_df = (
     baseline_df
     .withColumn("inference_timestamp", F.lit("2025-06-01").cast("timestamp"))
-    .withColumn("model_id", F.lit(model_name))
+    .withColumn("model_id", F.lit(monitor_model_id))
 )
 
 baseline_df.write.mode("overwrite").saveAsTable(baseline_table)
@@ -118,7 +123,7 @@ if "model_id" not in existing_cols:
 spark.sql(f"""
     UPDATE {predictions_table}
     SET inference_timestamp = CAST('2025-07-01' AS TIMESTAMP),
-        model_id = '{model_name}'
+        model_id = '{monitor_model_id}'
     WHERE inference_timestamp IS NULL
 """)
 
@@ -162,6 +167,9 @@ drifted_df.write.mode("append").saveAsTable(predictions_table)
 
 print(f"Drifted rows appended: {drifted_df.count()}")
 print(f"Total rows in predictions table: {spark.table(predictions_table).count()}")
+
+# Verify we have multiple time windows
+display(spark.sql(f"SELECT inference_timestamp, COUNT(*) as row_count FROM {predictions_table} GROUP BY 1 ORDER BY 1"))
 
 # COMMAND ----------
 
@@ -220,36 +228,22 @@ print(f"Dashboard: {monitor_info.assets_dir}")
 
 # COMMAND ----------
 
-# Wait for monitor to leave PENDING state, then trigger refresh
-print("Waiting for monitor to initialize...")
+# Trigger refresh and wait for completion
+w.quality_monitors.run_refresh(table_name=predictions_table)
+print("Monitor refresh triggered — this takes 1-3 minutes...")
+
 while True:
-    monitor = w.quality_monitors.get(table_name=predictions_table)
-    status = monitor.status
-    print(f"  Monitor status: {status} ({time.strftime('%H:%M:%S')})")
-    if "PENDING" not in str(status):
-        break
-    time.sleep(15)
-
-# Check if a refresh is already running (create can auto-trigger one)
-refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
-refreshes = refresh_list.refreshes or []
-active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
-
-if not active:
-    w.quality_monitors.run_refresh(table_name=predictions_table)
-    print("Monitor refresh triggered — this takes 1-3 minutes...")
-else:
-    print("Refresh already in progress — waiting for completion...")
-
-# Poll until refresh completes
-while True:
-    refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
-    refreshes = refresh_list.refreshes or []
-    active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
+    refreshes_response = w.quality_monitors.list_refreshes(table_name=predictions_table)
+    active = [r for r in refreshes_response.refreshes if r.state in ("PENDING", "RUNNING")]
     if not active:
-        latest = sorted(refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
+        latest = sorted(refreshes_response.refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
         print(f"Refresh complete — state: {latest.state}")
-        break
+        if latest.state == "SUCCEEDED":
+            print("Monitor refresh succeeded.")
+            break
+        elif latest.state in ("FAILED", "CANCELLED"):
+            print(f"Monitor refresh ended with state: {latest.state}")
+            break
     print(f"  Still running... ({time.strftime('%H:%M:%S')})")
     time.sleep(30)
 
@@ -262,13 +256,23 @@ while True:
 
 # COMMAND ----------
 
+# Check what windows were computed
+display(spark.sql(f"""
+    SELECT DISTINCT window, granularity, model_id
+    FROM {catalog}.{schema}.churn_predictions_profile_metrics
+    ORDER BY window
+"""))
+
+# COMMAND ----------
+
 display(spark.sql(f"""
     SELECT window, column_name,
-           count, avg, stddev, min, max,
-           num_zeros, percent_null
+           count, mean, stddev, min, max,
+           percent_zeros, percent_nulls
     FROM {catalog}.{schema}.churn_predictions_profile_metrics
     WHERE column_name IN ('monthly_charges', 'tenure_months', 'contract_type', 'prediction')
       AND slice_key IS NULL
+      AND window IS NOT NULL
     ORDER BY column_name, window
 """))
 
@@ -296,7 +300,7 @@ display(spark.sql(f"""
            wasserstein_distance,
            ks_test.statistic AS ks_statistic,
            ks_test.pvalue AS ks_pvalue,
-           population_stability_index
+           population_stability_index AS psi
     FROM {catalog}.{schema}.churn_predictions_drift_metrics
     WHERE column_name IN ('monthly_charges', 'total_charges', 'tenure_months')
       AND slice_key IS NULL
@@ -335,7 +339,7 @@ display(spark.sql(f"""
            END AS drift_status
     FROM {catalog}.{schema}.churn_predictions_drift_metrics
     WHERE slice_key IS NULL
-      AND CAST(window.start AS STRING) LIKE '%2025-08%'
+      AND window IS NOT NULL
     ORDER BY COALESCE(population_stability_index, 0) DESC
 """))
 
@@ -350,36 +354,21 @@ display(spark.sql(f"""
 
 # COMMAND ----------
 
-# Add churn_label column to both tables if not present
+# Add label column as DOUBLE (must match prediction column type for monitoring)
 existing_cols = [c.lower() for c in spark.table(predictions_table).columns]
 if "churn_label" not in existing_cols:
-    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (churn_label INT)")
-
-baseline_cols = [c.lower() for c in spark.table(baseline_table).columns]
-if "churn_label" not in baseline_cols:
-    spark.sql(f"ALTER TABLE {baseline_table} ADD COLUMNS (churn_label INT)")
+    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (churn_label DOUBLE)")
 
 # MERGE ground-truth labels into predictions
 # Model uses LabelEncoder: Yes=1, No=0 — match that encoding
 spark.sql(f"""
     MERGE INTO {predictions_table} AS p
     USING (
-        SELECT customer_id, CASE WHEN churn = 'Yes' THEN 1 ELSE 0 END AS churn_label
+        SELECT customer_id, CAST(CASE WHEN churn = 'Yes' THEN 1 ELSE 0 END AS DOUBLE) AS churn_label
         FROM {catalog}.{schema}.churn_labels
     ) AS l
     ON p.customer_id = l.customer_id
     WHEN MATCHED THEN UPDATE SET p.churn_label = l.churn_label
-""")
-
-# MERGE labels into baseline too (needed for monitor label_col)
-spark.sql(f"""
-    MERGE INTO {baseline_table} AS b
-    USING (
-        SELECT customer_id, CASE WHEN churn = 'Yes' THEN 1 ELSE 0 END AS churn_label
-        FROM {catalog}.{schema}.churn_labels
-    ) AS l
-    ON b.customer_id = l.customer_id
-    WHEN MATCHED THEN UPDATE SET b.churn_label = l.churn_label
 """)
 
 label_coverage = spark.sql(f"""
@@ -409,53 +398,20 @@ w.quality_monitors.update(
     output_schema_name=f"{catalog}.{schema}",
 )
 
-# Wait for monitor to leave PENDING state after update
-print("Waiting for monitor to initialize after update...")
-while True:
-    monitor = w.quality_monitors.get(table_name=predictions_table)
-    status = monitor.status
-    print(f"  Monitor status: {status} ({time.strftime('%H:%M:%S')})")
-    if status != "MONITOR_STATUS_PENDING":
-        break
-    time.sleep(15)
-
-# Trigger refresh
-refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
-refreshes = refresh_list.refreshes or []
-active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
-
-if not active:
-    w.quality_monitors.run_refresh(table_name=predictions_table)
-    print("Refresh triggered with label column — model quality metrics will be computed")
-else:
-    print("Refresh already in progress — waiting for completion...")
-
-# Poll until refresh completes
-while True:
-    refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
-    refreshes = refresh_list.refreshes or []
-    active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
-    if not active:
-        latest = sorted(refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
-        print(f"Refresh complete — state: {latest.state}")
-        break
-    print(f"  Still running... ({time.strftime('%H:%M:%S')})")
-    time.sleep(30)
+w.quality_monitors.run_refresh(table_name=predictions_table)
+print("Refresh triggered with label column — model quality metrics will be computed")
+print("This takes 1-3 minutes. You can continue reading while it runs.")
 
 # COMMAND ----------
 
 # Model quality metrics (run after refresh completes)
 display(spark.sql(f"""
     SELECT window,
-           accuracy_score,
-           precision.weighted AS precision,
-           recall.weighted AS recall,
-           f1_score.weighted AS f1_score,
-           log_loss
+           accuracy, precision, recall, f1_score, log_loss
     FROM {catalog}.{schema}.churn_predictions_profile_metrics
     WHERE column_name = 'prediction'
       AND slice_key IS NULL
-      AND accuracy_score IS NOT NULL
+      AND accuracy IS NOT NULL
     ORDER BY window
 """))
 
@@ -540,6 +496,7 @@ print(f"{'='*60}")
 try:
     info = w.quality_monitors.get(table_name=predictions_table)
     print(f"Dashboard assets: {info.assets_dir}")
+    print(f"Dashboard ID: {info.dashboard_id}")
     print(f"\nOpen the dashboard in your Databricks workspace to see auto-generated visualizations.")
 except Exception as e:
     print(f"Monitor info: {e}")
