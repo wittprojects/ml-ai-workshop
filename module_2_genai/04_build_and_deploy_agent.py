@@ -224,38 +224,38 @@ print(f"It is included in the deployed app code as a VectorSearchRetrieverTool."
 
 # COMMAND ----------
 
-from databricks.sdk import WorkspaceClient
-import requests, json
+# from databricks.sdk import WorkspaceClient
+# import requests, json
 
-w = WorkspaceClient()
+# w = WorkspaceClient()
 
-# Get the app URL
-app_info = w.apps.get(app_name)
-app_url = f"https://{app_info.url}"
-print(f"App URL: {app_url}")
+# # Get the app URL
+# app_info = w.apps.get(app_name)
+# app_url = f"https://{app_info.url}"
+# print(f"App URL: {app_url}")
 
-# Get a token for authentication
-token = w.tokens.create(comment="workshop-test", lifetime_seconds=600)
+# # Get a token for authentication
+# token = w.tokens.create(comment="workshop-test", lifetime_seconds=600)
 
-# Test the /chat endpoint
-response = requests.post(
-    f"{app_url}/chat",
-    headers={
-        "Authorization": f"Bearer {token.token_value}",
-        "Content-Type": "application/json"
-    },
-    json={
-        "messages": [
-            {"role": "user", "content": "A customer just called in about an escalated ticket. Help me retain them."}
-        ]
-    }
-)
+# # Test the /chat endpoint
+# response = requests.post(
+#     f"{app_url}/chat",
+#     headers={
+#         "Authorization": f"Bearer {token.token_value}",
+#         "Content-Type": "application/json"
+#     },
+#     json={
+#         "messages": [
+#             {"role": "user", "content": "A customer just called in about an escalated ticket. Help me retain them."}
+#         ]
+#     }
+# )
 
-print(f"\nStatus: {response.status_code}")
-print(f"\nAgent Response:\n{response.json()['response']}")
+# print(f"\nStatus: {response.status_code}")
+# print(f"\nAgent Response:\n{response.json()['response']}")
 
-# Clean up the temporary token
-w.tokens.delete(token.token_info.token_id)
+# # Clean up the temporary token
+# w.tokens.delete(token.token_info.token_id)
 
 # COMMAND ----------
 
