@@ -19,7 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 optuna lightgbm shap uv -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk==0.102.0 optuna==4.8.0 lightgbm==4.6.0 shap==0.51.0 uv==0.10.11 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -206,6 +206,26 @@ final_pipeline = Pipeline([
     ("classifier", lgb.LGBMClassifier(**best_params, random_state=42, verbose=-1)),
 ])
 
+# Conda Env for a more deterministic build. 
+conda_env = {
+    "channels": ["conda-forge"],
+    "dependencies": [
+        "python=3.12.3",
+        "pip<=25.0.1",
+        "mlflow==3.8.1",
+        {
+            "pip": [
+                "scikit-learn==1.6.1",
+                "lightgbm==4.6.0",
+                "pyarrow==21.0.0",
+                "cloudpickle==3.0.0",
+                "databricks-feature-lookup",
+            ]
+        },
+    ],
+    "name": "mlflow-env",
+}
+
 # For Feature Store models, the input_example should contain only the lookup keys
 # since the endpoint handles feature retrieval from the online table automatically
 input_example = labels_df.select("customer_id").limit(5).toPandas()
@@ -230,13 +250,15 @@ with mlflow.start_run(run_name="final_model") as run:
 
     # Log with Feature Engineering client for lineage
     # Override pyarrow pin from cluster env to avoid conflict with databricks-feature-lookup at serving time
+    import os
+    os.environ["MLFLOW_REQUIREMENTS_INFERENCE_RAISE_ERRORS"] = "false"
     fe.log_model(
         model=final_pipeline,
         artifact_path="final_model",
         flavor=mlflow.sklearn,
         training_set=training_set,
         input_example=input_example,
-        extra_pip_requirements=["pyarrow>=16"],
+        conda_env=conda_env,
         registered_model_name=None,  # Registration happens in the cell below
     )
 

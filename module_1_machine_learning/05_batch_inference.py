@@ -15,7 +15,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering>=0.14.0 databricks-sdk>=0.50.0 lightgbm mlflow -q
+# MAGIC %pip install databricks-feature-engineering>=0.14.0 databricks-sdk>=0.50.0 lightgbm==4.6.0 mlflow==3.8.1 uv -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -48,6 +48,7 @@ print(f"Test customers to score: {test_labels.count()}")
 batch_predictions = fe.score_batch(
     model_uri=f"models:/{model_name}@Champion",
     df=test_labels,
+    env_manager="uv"
 )
 
 display(batch_predictions.limit(10))

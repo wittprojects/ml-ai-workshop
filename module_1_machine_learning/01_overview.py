@@ -48,20 +48,6 @@
 
 # COMMAND ----------
 
-# Quick look at what's pre-installed
-import importlib
-
-libs = ["sklearn", "lightgbm", "xgboost", "optuna", "mlflow", "shap", "pandas", "numpy"]
-for lib in libs:
-    try:
-        mod = importlib.import_module(lib)
-        version = getattr(mod, "__version__", "installed")
-        print(f"  ✓ {lib}: {version}")
-    except ImportError:
-        print(f"  ✗ {lib}: not installed")
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ## Explore the Data
 # MAGIC

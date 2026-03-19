@@ -23,7 +23,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 mlflow -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 lightgbm==4.6.0 mlflow==3.8.1 uv -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -52,6 +52,11 @@ baseline_table = f"{catalog}.{schema}.churn_predictions_baseline"
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 1. Create Baseline Table
 # MAGIC
 # MAGIC A monitor needs a **baseline** — the distribution the model was trained on. If we compare a table against itself, drift is always zero.
@@ -66,6 +71,7 @@ train_labels = spark.table("churn_labels").filter("split = 'train'").select("cus
 baseline_df = fe.score_batch(
     model_uri=f"models:/{model_name}@Champion",
     df=train_labels,
+    env_manager="uv"
 )
 
 # Add monitoring columns — fixed timestamp for the baseline window
@@ -214,12 +220,31 @@ print(f"Dashboard: {monitor_info.assets_dir}")
 
 # COMMAND ----------
 
-# Trigger refresh and wait for completion
-w.quality_monitors.run_refresh(table_name=predictions_table)
-print("Monitor refresh triggered — this takes 1-3 minutes...")
-
+# Wait for monitor to leave PENDING state, then trigger refresh
+print("Waiting for monitor to initialize...")
 while True:
-    refreshes = w.quality_monitors.list_refreshes(table_name=predictions_table)
+    monitor = w.quality_monitors.get(table_name=predictions_table)
+    status = monitor.status
+    print(f"  Monitor status: {status} ({time.strftime('%H:%M:%S')})")
+    if "PENDING" not in str(status):
+        break
+    time.sleep(15)
+
+# Check if a refresh is already running (create can auto-trigger one)
+refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
+refreshes = refresh_list.refreshes or []
+active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
+
+if not active:
+    w.quality_monitors.run_refresh(table_name=predictions_table)
+    print("Monitor refresh triggered — this takes 1-3 minutes...")
+else:
+    print("Refresh already in progress — waiting for completion...")
+
+# Poll until refresh completes
+while True:
+    refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
+    refreshes = refresh_list.refreshes or []
     active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
     if not active:
         latest = sorted(refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
@@ -239,8 +264,8 @@ while True:
 
 display(spark.sql(f"""
     SELECT window, column_name,
-           count, mean, stddev, min, max,
-           percent_zeros, percent_nulls
+           count, avg, stddev, min, max,
+           num_zeros, percent_null
     FROM {catalog}.{schema}.churn_predictions_profile_metrics
     WHERE column_name IN ('monthly_charges', 'tenure_months', 'contract_type', 'prediction')
       AND slice_key IS NULL
@@ -271,7 +296,7 @@ display(spark.sql(f"""
            wasserstein_distance,
            ks_test.statistic AS ks_statistic,
            ks_test.pvalue AS ks_pvalue,
-           psi
+           population_stability_index
     FROM {catalog}.{schema}.churn_predictions_drift_metrics
     WHERE column_name IN ('monthly_charges', 'total_charges', 'tenure_months')
       AND slice_key IS NULL
@@ -285,8 +310,8 @@ display(spark.sql(f"""
     SELECT window, column_name,
            chi_squared_test.statistic AS chi2_statistic,
            chi_squared_test.pvalue AS chi2_pvalue,
-           js_divergence,
-           total_variation_distance
+           js_distance,
+           tv_distance
     FROM {catalog}.{schema}.churn_predictions_drift_metrics
     WHERE column_name IN ('contract_type', 'internet_service', 'payment_method', 'prediction')
       AND slice_key IS NULL
@@ -298,20 +323,20 @@ display(spark.sql(f"""
 # Drift summary: which features drifted most?
 display(spark.sql(f"""
     SELECT column_name, window,
-           COALESCE(psi, 0) AS psi,
+           COALESCE(population_stability_index, 0) AS psi,
            COALESCE(wasserstein_distance, 0) AS wasserstein,
-           COALESCE(js_divergence, 0) AS js_divergence,
+           COALESCE(js_distance, 0) AS js_distance,
            COALESCE(ks_test.pvalue, chi_squared_test.pvalue) AS test_pvalue,
            CASE
-               WHEN COALESCE(psi, 0) > 0.2 THEN 'MAJOR DRIFT'
-               WHEN COALESCE(psi, 0) > 0.1 THEN 'MODERATE DRIFT'
+               WHEN COALESCE(population_stability_index, 0) > 0.2 THEN 'MAJOR DRIFT'
+               WHEN COALESCE(population_stability_index, 0) > 0.1 THEN 'MODERATE DRIFT'
                WHEN COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05 THEN 'SIGNIFICANT'
                ELSE 'STABLE'
            END AS drift_status
     FROM {catalog}.{schema}.churn_predictions_drift_metrics
     WHERE slice_key IS NULL
-      AND window LIKE '%2025-08%'
-    ORDER BY COALESCE(psi, 0) DESC
+      AND CAST(window.start AS STRING) LIKE '%2025-08%'
+    ORDER BY COALESCE(population_stability_index, 0) DESC
 """))
 
 # COMMAND ----------
@@ -325,6 +350,15 @@ display(spark.sql(f"""
 
 # COMMAND ----------
 
+# Add churn_label column to both tables if not present
+existing_cols = [c.lower() for c in spark.table(predictions_table).columns]
+if "churn_label" not in existing_cols:
+    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (churn_label INT)")
+
+baseline_cols = [c.lower() for c in spark.table(baseline_table).columns]
+if "churn_label" not in baseline_cols:
+    spark.sql(f"ALTER TABLE {baseline_table} ADD COLUMNS (churn_label INT)")
+
 # MERGE ground-truth labels into predictions
 # Model uses LabelEncoder: Yes=1, No=0 — match that encoding
 spark.sql(f"""
@@ -335,6 +369,17 @@ spark.sql(f"""
     ) AS l
     ON p.customer_id = l.customer_id
     WHEN MATCHED THEN UPDATE SET p.churn_label = l.churn_label
+""")
+
+# MERGE labels into baseline too (needed for monitor label_col)
+spark.sql(f"""
+    MERGE INTO {baseline_table} AS b
+    USING (
+        SELECT customer_id, CASE WHEN churn = 'Yes' THEN 1 ELSE 0 END AS churn_label
+        FROM {catalog}.{schema}.churn_labels
+    ) AS l
+    ON b.customer_id = l.customer_id
+    WHEN MATCHED THEN UPDATE SET b.churn_label = l.churn_label
 """)
 
 label_coverage = spark.sql(f"""
@@ -364,20 +409,53 @@ w.quality_monitors.update(
     output_schema_name=f"{catalog}.{schema}",
 )
 
-w.quality_monitors.run_refresh(table_name=predictions_table)
-print("Refresh triggered with label column — model quality metrics will be computed")
-print("This takes 1-3 minutes. You can continue reading while it runs.")
+# Wait for monitor to leave PENDING state after update
+print("Waiting for monitor to initialize after update...")
+while True:
+    monitor = w.quality_monitors.get(table_name=predictions_table)
+    status = monitor.status
+    print(f"  Monitor status: {status} ({time.strftime('%H:%M:%S')})")
+    if status != "MONITOR_STATUS_PENDING":
+        break
+    time.sleep(15)
+
+# Trigger refresh
+refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
+refreshes = refresh_list.refreshes or []
+active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
+
+if not active:
+    w.quality_monitors.run_refresh(table_name=predictions_table)
+    print("Refresh triggered with label column — model quality metrics will be computed")
+else:
+    print("Refresh already in progress — waiting for completion...")
+
+# Poll until refresh completes
+while True:
+    refresh_list = w.quality_monitors.list_refreshes(table_name=predictions_table)
+    refreshes = refresh_list.refreshes or []
+    active = [r for r in refreshes if r.state in ("PENDING", "RUNNING")]
+    if not active:
+        latest = sorted(refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
+        print(f"Refresh complete — state: {latest.state}")
+        break
+    print(f"  Still running... ({time.strftime('%H:%M:%S')})")
+    time.sleep(30)
 
 # COMMAND ----------
 
 # Model quality metrics (run after refresh completes)
 display(spark.sql(f"""
     SELECT window,
-           accuracy, precision, recall, f1_score, log_loss
+           accuracy_score,
+           precision.weighted AS precision,
+           recall.weighted AS recall,
+           f1_score.weighted AS f1_score,
+           log_loss
     FROM {catalog}.{schema}.churn_predictions_profile_metrics
     WHERE column_name = 'prediction'
       AND slice_key IS NULL
-      AND accuracy IS NOT NULL
+      AND accuracy_score IS NOT NULL
     ORDER BY window
 """))
 
@@ -420,21 +498,21 @@ display(spark.sql(f"""
 
 alert_results = spark.sql(f"""
     SELECT column_name, window,
-           COALESCE(psi, 0) AS psi,
+           COALESCE(population_stability_index, 0) AS psi,
            COALESCE(ks_test.pvalue, chi_squared_test.pvalue) AS test_pvalue,
            CASE
-               WHEN COALESCE(psi, 0) > 0.2 THEN 'CRITICAL — major distribution shift'
-               WHEN COALESCE(psi, 0) > 0.1 THEN 'WARNING — moderate drift detected'
+               WHEN COALESCE(population_stability_index, 0) > 0.2 THEN 'CRITICAL — major distribution shift'
+               WHEN COALESCE(population_stability_index, 0) > 0.1 THEN 'WARNING — moderate drift detected'
                WHEN COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05 THEN 'ALERT — statistically significant drift'
                ELSE 'OK'
            END AS status
     FROM {catalog}.{schema}.churn_predictions_drift_metrics
     WHERE slice_key IS NULL
       AND (
-          COALESCE(psi, 0) > 0.1
+          COALESCE(population_stability_index, 0) > 0.1
           OR COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05
       )
-    ORDER BY COALESCE(psi, 0) DESC
+    ORDER BY COALESCE(population_stability_index, 0) DESC
 """)
 
 display(alert_results)

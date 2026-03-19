@@ -16,10 +16,6 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
-
-# COMMAND ----------
-
 # MAGIC %pip install faker databricks-sdk==0.50.0 -q
 # MAGIC dbutils.library.restartPython()
 
