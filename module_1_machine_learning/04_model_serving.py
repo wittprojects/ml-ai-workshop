@@ -5,7 +5,7 @@
 # ///
 # MAGIC %md
 # MAGIC # Module 1: Machine Learning on Databricks
-# MAGIC ## Notebook 05 — Model Serving with Online Tables
+# MAGIC ## Notebook 04 — Model Serving with Online Tables
 # MAGIC
 # MAGIC **Time**: ~8 min
 # MAGIC
@@ -266,4 +266,4 @@ else:
 # MAGIC
 # MAGIC This endpoint will be used in Module 2 as the `get_churn_risk()` tool in our retention agent.
 # MAGIC
-# MAGIC **Next**: [06 Batch Inference →](./06_batch_inference)
+# MAGIC **Next**: [05 Batch Inference →](./05_batch_inference)

@@ -5,7 +5,7 @@
 # ///
 # MAGIC %md
 # MAGIC # Module 1: Machine Learning on Databricks
-# MAGIC ## Notebook 07 — Lakehouse Monitoring
+# MAGIC ## Notebook 06 — Lakehouse Monitoring
 # MAGIC
 # MAGIC **Time**: ~15 min
 # MAGIC
@@ -96,7 +96,7 @@ display(
 # MAGIC %md
 # MAGIC ## 2. Prepare Inference Table
 # MAGIC
-# MAGIC The predictions saved in notebook 06 (test split) represent our "current" production scoring window.
+# MAGIC The predictions saved in notebook 05 (test split) represent our "current" production scoring window.
 
 # COMMAND ----------
 

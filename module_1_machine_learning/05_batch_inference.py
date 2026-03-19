@@ -5,7 +5,7 @@
 # ///
 # MAGIC %md
 # MAGIC # Module 1: Machine Learning on Databricks
-# MAGIC ## Notebook 06 — Batch Inference
+# MAGIC ## Notebook 05 — Batch Inference
 # MAGIC
 # MAGIC **Time**: ~5 min
 # MAGIC

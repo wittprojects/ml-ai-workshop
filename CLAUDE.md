@@ -10,7 +10,7 @@ A portable, two-module Databricks workshop (~55 min each) covering Machine Learn
 
 - **`_resources/00_config.py`** — Single source of truth for catalog, schema, endpoint names. Every notebook starts with `%run ../_resources/00_config`. Instructor configures this before cloning for students.
 - **`_resources/01_setup.py`** — Run once by instructor. Provisions data (IBM Telco Churn for Module 1, customer service CSVs for Module 2), creates tables, vector search endpoint/index, and grants permissions.
-- **Module 1 (`module_1_machine_learning/`)** — Sequential notebooks 01-07: data exploration → feature engineering (Feature Store + UC) → model training (LightGBM + Optuna) → model serving → batch inference → Lakehouse Monitoring. Notebook `03a` is a markdown-only alternative track for Genie Code.
+- **Module 1 (`module_1_machine_learning/`)** — Sequential notebooks 01-06: data exploration → feature engineering (Feature Store + UC) → model training (LightGBM + Optuna) → model serving → batch inference → Lakehouse Monitoring. Notebook `03a` is a markdown-only alternative track for Genie Code.
 - **Module 2 (`module_2_genai/`)** — Sequential notebooks 01-03, 05: AI Functions (ai_query/ai_extract) → UC tool creation → AI Playground + Databricks Apps deployment → agent evaluation.
 - **`agent_app/`** — Standalone FastAPI application deployed as a Databricks App. `agent.py` is the same agent from Module 2 notebook 03, extracted as an importable module.
 

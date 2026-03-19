@@ -374,4 +374,4 @@ print(f"Best run_id saved: {final_run_id}")
 # MAGIC - **Feature Store** lineage preserved via `fe.log_model()`
 # MAGIC - **SHAP** revealed the most important churn drivers
 # MAGIC
-# MAGIC **Next**: [03a Genie Code Alternative →](./03a_genie_code_alternative) or [05 Model Serving →](./05_model_serving)
+# MAGIC **Next**: [03a Genie Code Alternative →](./03a_genie_code_alternative) or [04 Model Serving →](./04_model_serving)

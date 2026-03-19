@@ -127,4 +127,4 @@
 # MAGIC **Both approaches produce the same output**: a registered MLflow model with Feature Store lineage.
 # MAGIC The best approach depends on your use case and experience level.
 # MAGIC
-# MAGIC **Next**: [05 Model Serving →](./05_model_serving)
+# MAGIC **Next**: [04 Model Serving →](./04_model_serving)
