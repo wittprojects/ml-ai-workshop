@@ -24,6 +24,11 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install databricks-sdk>=0.74.0 -q
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
 # MAGIC %run ../_resources/00_config
 
 # COMMAND ----------
@@ -254,84 +259,138 @@ for view_name in ["churn_customer_metrics", "churn_ticket_metrics", "tickets_wit
 # MAGIC When powered by metric views, every answer uses the same governed metric definitions —
 # MAGIC no risk of "churn rate" meaning different things to different people.
 # MAGIC
-# MAGIC > **Note**: Genie Rooms are created through the UI. Follow the steps below.
+# MAGIC We'll use the **Genie Space API** (`WorkspaceClient.genie.create_space`) to create the
+# MAGIC room programmatically — complete with data sources, sample questions, and instructions.
+
+# COMMAND ----------
+
+import json
+import uuid
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 1: Open Genie
-# MAGIC 1. Click **Genie** in the left sidebar
-# MAGIC 2. Click **+ New** in the upper-right corner
+# MAGIC ### Pick a SQL warehouse
+# MAGIC
+# MAGIC Genie Rooms require a **Pro or Serverless SQL warehouse**. We'll find one automatically.
+
+# COMMAND ----------
+
+from databricks.sdk.service.sql import EndpointInfoWarehouseType
+
+warehouses = [
+    wh for wh in w.warehouses.list()
+    if wh.warehouse_type in (EndpointInfoWarehouseType.PRO, EndpointInfoWarehouseType.TYPE_UNSPECIFIED)
+]
+if not warehouses:
+    raise RuntimeError("No Pro or Serverless SQL warehouse found. Create one before running this notebook.")
+
+warehouse_id = warehouses[0].id
+print(f"Using warehouse: {warehouses[0].name} ({warehouse_id})")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 2: Add Data Sources
+# MAGIC ### Define the Genie Room configuration
 # MAGIC
-# MAGIC Search for and select these metric views as data sources:
+# MAGIC The `serialized_space` parameter is a JSON string that specifies:
+# MAGIC - **Data sources** — our two metric views
+# MAGIC - **Sample questions** — suggested prompts shown to users
+# MAGIC - **Instructions** — rules for consistent formatting and domain context
 
 # COMMAND ----------
 
-print("Add these metric views as data sources in your Genie Room:\n")
-print(f"  {catalog}.{schema}.churn_customer_metrics")
-print(f"  {catalog}.{schema}.churn_ticket_metrics")
+def _hex_id():
+    """Generate a 32-char lowercase hex ID for sample questions."""
+    return uuid.uuid4().hex
+
+space_config = {
+    "version": 2,
+    "config": {
+        "sample_questions": [
+            {"id": _hex_id(), "question": ["What is the churn rate by contract type?"]},
+            {"id": _hex_id(), "question": ["Show me average revenue per user for churned vs retained customers"]},
+            {"id": _hex_id(), "question": ["How does ticket volume trend by month for churners?"]},
+            {"id": _hex_id(), "question": ["What is the ticket resolution rate by category and priority?"]},
+            {"id": _hex_id(), "question": ["Which tenure bucket has the highest churn rate?"]},
+            {"id": _hex_id(), "question": ["Compare ARPU across internet service types"]},
+        ],
+        "instructions": {
+            "text_instructions": "\n".join([
+                "Churn rate should always be displayed as a percentage.",
+                "ARPU stands for Average Revenue Per User (average monthly charges).",
+                "Churned customers have churn = 'Yes', retained have churn = 'No'.",
+                "When showing rates, round to one decimal place.",
+                "Tenure buckets are: 0-12 months, 13-24 months, 25-48 months, 49+ months.",
+                "Contract types are: Month-to-month, One year, Two year.",
+                "Ticket categories are: billing, technical, cancellation, upgrade, general.",
+            ]),
+        },
+    },
+    "data_sources": {
+        "metric_views": [
+            {
+                "identifier": f"{catalog}.{schema}.churn_customer_metrics",
+                "description": "Customer churn KPIs: churn rate, ARPU, tenure, segmented by contract, internet service, and tenure bucket",
+            },
+            {
+                "identifier": f"{catalog}.{schema}.churn_ticket_metrics",
+                "description": "Support ticket KPIs: volume, resolution rate, escalation rate, segmented by category, priority, and month",
+            },
+        ],
+    },
+}
+
+print(json.dumps(space_config, indent=2)[:800] + "\n...")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 3: Configure the Genie Room
-# MAGIC
-# MAGIC After creating the room, click **Configure** (gear icon):
-# MAGIC
-# MAGIC | Setting | Value |
-# MAGIC |---------|-------|
-# MAGIC | **Title** | Telecom Churn Analytics |
-# MAGIC | **Description** | Ask questions about customer churn, revenue, tenure, and support ticket patterns. Powered by governed metric views. |
-# MAGIC | **Default warehouse** | Select a Serverless SQL Warehouse |
+# MAGIC ### Create the Genie Room
+
+# COMMAND ----------
+
+genie_space = w.genie.create_space(
+    warehouse_id=warehouse_id,
+    title="Telecom Churn Analytics",
+    description="Ask questions about customer churn, revenue, tenure, and support ticket patterns. Powered by governed metric views.",
+    serialized_space=json.dumps(space_config),
+)
+
+space_url = f"{w.config.host}/genie/rooms/{genie_space.space_id}"
+print(f"✓ Genie Room created: {genie_space.title}")
+print(f"  Space ID: {genie_space.space_id}")
+print(f"  URL:      {space_url}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 4: Add Sample Questions
+# MAGIC ### Test the Genie Room
 # MAGIC
-# MAGIC In **Configure → Sample questions**, add these to guide users:
-# MAGIC
-# MAGIC 1. *What is the churn rate by contract type?*
-# MAGIC 2. *Show me average revenue per user for churned vs retained customers*
-# MAGIC 3. *How does ticket volume trend by month for churners?*
-# MAGIC 4. *What is the ticket resolution rate by category and priority?*
-# MAGIC 5. *Which tenure bucket has the highest churn rate?*
-# MAGIC 6. *Compare ARPU across internet service types*
+# MAGIC Open the URL above, or try asking questions right here via the API:
+
+# COMMAND ----------
+
+conversation = w.genie.start_conversation(
+    space_id=genie_space.space_id,
+    content="What is the churn rate by contract type?",
+)
+print(f"Started conversation: {conversation.conversation_id}")
+print("Open the Genie Room URL above to see the response and continue the conversation.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 5: Add General Instructions
-# MAGIC
-# MAGIC In **Configure → Instructions**, add these rules so Genie produces consistent output:
-# MAGIC
-# MAGIC ```
-# MAGIC - Churn rate should always be displayed as a percentage
-# MAGIC - ARPU stands for Average Revenue Per User (average monthly charges)
-# MAGIC - Churned customers have churn = 'Yes', retained have churn = 'No'
-# MAGIC - When showing rates, round to one decimal place
-# MAGIC - Tenure buckets are: 0-12 months, 13-24 months, 25-48 months, 49+ months
-# MAGIC - Contract types are: Month-to-month, One year, Two year
-# MAGIC - Ticket categories are: billing, technical, cancellation, upgrade, general
-# MAGIC ```
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 6: Test the Room
-# MAGIC
-# MAGIC Try asking these questions in the Genie chat:
+# MAGIC **Try these questions in the Genie Room**:
 # MAGIC - *"What is our overall churn rate?"*
 # MAGIC - *"Break down churn rate by contract type and internet service"*
 # MAGIC - *"Show me the monthly ticket trend for cancellation tickets"*
 # MAGIC - *"Which customer segment has the highest ARPU?"*
 # MAGIC
-# MAGIC Genie will generate SQL using `MEASURE()` against your metric views and return
+# MAGIC Genie generates SQL using `MEASURE()` against your metric views and returns
 # MAGIC results as tables or charts — all governed by the definitions you created above.
 
 # COMMAND ----------
@@ -343,7 +402,7 @@ print(f"  {catalog}.{schema}.churn_ticket_metrics")
 # MAGIC |---------|-----------------|
 # MAGIC | **Metric Views** | Define metrics once in YAML, query flexibly with `MEASURE()` |
 # MAGIC | **Dimensions vs Measures** | Dimensions slice data; measures aggregate it |
-# MAGIC | **Genie Rooms** | Natural-language interface powered by governed metric views |
+# MAGIC | **Genie Space API** | Create and configure Genie Rooms programmatically via the SDK |
 # MAGIC | **Governance** | Metric views are Unity Catalog objects with standard permissions |
 # MAGIC
 # MAGIC **Why this matters**: Metric views ensure that "churn rate" means the same thing
@@ -352,7 +411,9 @@ print(f"  {catalog}.{schema}.churn_ticket_metrics")
 
 # COMMAND ----------
 
-# --- Uncomment to clean up metric views ---
+# --- Uncomment to clean up ---
+# w.genie.trash_space(space_id=genie_space.space_id)
+# print(f"Trashed Genie Room: {genie_space.space_id}")
 # spark.sql(f"DROP VIEW IF EXISTS {catalog}.{schema}.churn_customer_metrics")
 # spark.sql(f"DROP VIEW IF EXISTS {catalog}.{schema}.churn_ticket_metrics")
 # spark.sql(f"DROP VIEW IF EXISTS {catalog}.{schema}.tickets_with_customers")
