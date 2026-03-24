@@ -323,15 +323,15 @@ space_config = {
         "text_instructions": [
             {
                 "id": _hex_id(),
-                "text": "\n".join([
-                    "Churn rate should always be displayed as a percentage.",
-                    "ARPU stands for Average Revenue Per User (average monthly charges).",
-                    "Churned customers have churn = 'Yes', retained have churn = 'No'.",
-                    "When showing rates, round to one decimal place.",
-                    "Tenure buckets are: 0-12 months, 13-24 months, 25-48 months, 49+ months.",
-                    "Contract types are: Month-to-month, One year, Two year.",
-                    "Ticket categories are: billing, technical, cancellation, upgrade, general.",
-                ]),
+                "content": [
+                    "Churn rate should always be displayed as a percentage. "
+                    "ARPU stands for Average Revenue Per User (average monthly charges). "
+                    "Churned customers have churn = 'Yes', retained have churn = 'No'. "
+                    "When showing rates, round to one decimal place. "
+                    "Tenure buckets are: 0-12 months, 13-24 months, 25-48 months, 49+ months. "
+                    "Contract types are: Month-to-month, One year, Two year. "
+                    "Ticket categories are: billing, technical, cancellation, upgrade, general."
+                ],
             },
         ],
     },
@@ -339,11 +339,11 @@ space_config = {
         "metric_views": [
             {
                 "identifier": f"{catalog}.{schema}.churn_customer_metrics",
-                "description": "Customer churn KPIs: churn rate, ARPU, tenure, segmented by contract, internet service, and tenure bucket",
+                "description": ["Customer churn KPIs: churn rate, ARPU, tenure, segmented by contract, internet service, and tenure bucket"],
             },
             {
                 "identifier": f"{catalog}.{schema}.churn_ticket_metrics",
-                "description": "Support ticket KPIs: volume, resolution rate, escalation rate, segmented by category, priority, and month",
+                "description": ["Support ticket KPIs: volume, resolution rate, escalation rate, segmented by category, priority, and month"],
             },
         ],
     },
