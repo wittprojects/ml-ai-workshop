@@ -318,17 +318,22 @@ space_config = {
             {"id": _hex_id(), "question": ["Which tenure bucket has the highest churn rate?"]},
             {"id": _hex_id(), "question": ["Compare ARPU across internet service types"]},
         ],
-        "instructions": {
-            "text_instructions": "\n".join([
-                "Churn rate should always be displayed as a percentage.",
-                "ARPU stands for Average Revenue Per User (average monthly charges).",
-                "Churned customers have churn = 'Yes', retained have churn = 'No'.",
-                "When showing rates, round to one decimal place.",
-                "Tenure buckets are: 0-12 months, 13-24 months, 25-48 months, 49+ months.",
-                "Contract types are: Month-to-month, One year, Two year.",
-                "Ticket categories are: billing, technical, cancellation, upgrade, general.",
-            ]),
-        },
+    },
+    "instructions": {
+        "text_instructions": [
+            {
+                "id": _hex_id(),
+                "text": "\n".join([
+                    "Churn rate should always be displayed as a percentage.",
+                    "ARPU stands for Average Revenue Per User (average monthly charges).",
+                    "Churned customers have churn = 'Yes', retained have churn = 'No'.",
+                    "When showing rates, round to one decimal place.",
+                    "Tenure buckets are: 0-12 months, 13-24 months, 25-48 months, 49+ months.",
+                    "Contract types are: Month-to-month, One year, Two year.",
+                    "Ticket categories are: billing, technical, cancellation, upgrade, general.",
+                ]),
+            },
+        ],
     },
     "data_sources": {
         "metric_views": [
