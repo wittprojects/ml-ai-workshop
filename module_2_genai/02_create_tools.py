@@ -230,4 +230,4 @@ for func in functions:
 # MAGIC
 # MAGIC All UC functions are registered with descriptions that the agent uses to decide when to call each tool.
 # MAGIC
-# MAGIC **Next**: [03 Build & Deploy Agent →](./03_build_and_deploy_agent)
+# MAGIC **Next**: [03 Agent Eval →](./03_agent_eval)

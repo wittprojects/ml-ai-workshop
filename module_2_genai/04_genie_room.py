@@ -18,9 +18,9 @@
 # MAGIC |----------|-------|
 # MAGIC | 01 AI Functions | FMAPI, ai_query(), ai_extract() |
 # MAGIC | 02 Create Tools | UC functions as agent tools |
-# MAGIC | 03 Build & Deploy Agent | AI Playground + Databricks Apps |
+# MAGIC | 03 Agent Eval | mlflow.genai.evaluate() |
 # MAGIC | **04 Metric Views & Genie Room** | Governed metrics + NL analytics |
-# MAGIC | 05 Agent Eval | mlflow.genai.evaluate() |
+# MAGIC | 05 Build & Deploy Agent | AI Playground + Databricks Apps |
 
 # COMMAND ----------
 

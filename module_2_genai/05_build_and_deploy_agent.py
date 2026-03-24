@@ -1,7 +1,7 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Module 2: GenAI Development & Deployment
-# MAGIC ## Notebook 03 — Build & Deploy an Agent
+# MAGIC ## Notebook 05 — Build & Deploy an Agent
 # MAGIC
 # MAGIC **Time**: ~12 min
 # MAGIC
@@ -13,8 +13,9 @@
 # MAGIC |----------|-------|
 # MAGIC | 01 AI Functions | FMAPI, ai_query(), ai_extract() |
 # MAGIC | 02 Create Tools | UC functions as agent tools |
-# MAGIC | **03 Build & Deploy Agent** | AI Playground + Databricks Apps |
-# MAGIC | 05 Agent Eval | mlflow.genai.evaluate() |
+# MAGIC | 03 Agent Eval | mlflow.genai.evaluate() |
+# MAGIC | 04 Metric Views & Genie Room | Governed metrics + NL analytics |
+# MAGIC | **05 Build & Deploy Agent** | AI Playground + Databricks Apps |
 
 # COMMAND ----------
 
@@ -271,4 +272,4 @@ print(f"It is included in the deployed app code as a VectorSearchRetrieverTool."
 # MAGIC | Deploy | Databricks Apps | Shipped agent as a FastAPI service with UC access |
 # MAGIC | Evaluate | *(Next notebook)* | Systematically evaluate agent quality |
 # MAGIC
-# MAGIC **Next**: [05 Agent Eval →](./05_agent_eval)
+# MAGIC **Next**: [03 Agent Eval →](./03_agent_eval)

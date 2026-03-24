@@ -5,7 +5,7 @@
 # ///
 # MAGIC %md
 # MAGIC # Module 2: GenAI Development & Deployment
-# MAGIC ## Notebook 05 — Agent Evaluation
+# MAGIC ## Notebook 03 — Agent Evaluation
 # MAGIC
 # MAGIC **Time**: ~8 min
 # MAGIC
