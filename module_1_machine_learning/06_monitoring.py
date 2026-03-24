@@ -226,11 +226,22 @@ monitor_info = w.quality_monitors.create(
 print(f"Monitor created for {predictions_table}")
 print(f"Dashboard: {monitor_info.assets_dir}")
 
+import time
+from databricks.sdk.service.catalog import MonitorInfoStatus, MonitorRefreshInfoState
+
+
+# Wait for monitor to be created
+while monitor_info.status == MonitorInfoStatus.MONITOR_STATUS_PENDING:
+  monitor_info = w.quality_monitors.get(table_name=predictions_table)
+  time.sleep(10)
+
+assert monitor_info.status == MonitorInfoStatus.MONITOR_STATUS_ACTIVE, "Error creating monitor"
+
 # COMMAND ----------
 
 # Trigger refresh and wait for completion
 w.quality_monitors.run_refresh(table_name=predictions_table)
-print("Monitor refresh triggered — this takes 1-3 minutes...")
+print("Monitor refresh triggered — this takes ~10 minutes...")
 
 while True:
     refreshes_response = w.quality_monitors.list_refreshes(table_name=predictions_table)
@@ -246,6 +257,10 @@ while True:
             break
     print(f"  Still running... ({time.strftime('%H:%M:%S')})")
     time.sleep(30)
+
+# COMMAND ----------
+
+w.quality_monitors.get(table_name=predictions_table)
 
 # COMMAND ----------
 
