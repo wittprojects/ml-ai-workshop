@@ -220,20 +220,35 @@ print(response.choices[0].message.content)
 # DBTITLE 1,Read PDFs from the UC Volume
 documents_df = (
     spark.read.format("binaryFile")
-    .load(documents_volume_path)
+    .load(documents_source_path)
     .select("path", "length", "content")
 )
-print(f"Loaded {documents_df.count()} documents from {documents_volume_path}")
+print(f"Loaded {documents_df.count()} documents from {documents_source_path}")
 display(documents_df.select("path", "length"))
 
 # COMMAND ----------
 
 # DBTITLE 1,ai_parse_document — single SQL call replaces an OCR + layout stack
-from pyspark.sql.functions import expr
+# MAGIC %md
+# MAGIC The `imageOutputPath` option asks the parser to render each page as a PNG into a UC
+# MAGIC Volume. We reuse those PNGs further down to overlay bounding boxes for visual
+# MAGIC debugging. `descriptionElementTypes='*'` enables AI-generated descriptions for
+# MAGIC figure elements as well.
+
+# COMMAND ----------
+
+from pyspark.sql.functions import expr, lit
 
 parsed_df = documents_df.withColumn(
     "parsed",
-    expr("ai_parse_document(content, map('version', '2.0'))"),
+    expr(f"""ai_parse_document(
+        content,
+        map(
+            'version', '2.0',
+            'imageOutputPath', '{parsed_images_path}',
+            'descriptionElementTypes', '*'
+        )
+    )"""),
 )
 
 # Materialize so downstream cells reuse the parse output instead of re-running it
@@ -272,6 +287,79 @@ spark.sql(f"""
     GROUP BY 1
     ORDER BY 2 DESC
 """).display()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Visual debugging — bounding-box overlay
+# MAGIC
+# MAGIC Because we passed `imageOutputPath`, the parser dropped a PNG of every page next to the
+# MAGIC source PDFs. Each element in `parsed.document.elements` carries a `bbox` array with
+# MAGIC pixel coordinates that map directly onto those PNGs. Overlaying them is the fastest
+# MAGIC way to confirm what the model actually segmented — useful when an extraction looks
+# MAGIC off and you need to figure out whether the parse or the prompt is at fault.
+
+# COMMAND ----------
+
+# DBTITLE 1,Overlay element bboxes on the rendered page
+import json
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from PIL import Image
+
+# Pull one parsed bill: page 0 image URI + the full elements array
+row = spark.sql(f"""
+    SELECT
+        regexp_extract(path, '/([^/]+)$', 1)                AS filename,
+        parsed:document:pages[0]:image_uri::string          AS page0_uri,
+        to_json(parsed:document:elements)                   AS elements_json
+    FROM {catalog}.{schema}.parsed_documents
+    WHERE path LIKE '%/bill_%'
+    ORDER BY path
+    LIMIT 1
+""").collect()[0]
+
+img = Image.open(row.page0_uri)
+elements = json.loads(row.elements_json)
+
+# One color per element type so the overlay is self-explanatory
+type_color = {
+    "title":          "#d62728",
+    "section_header": "#ff7f0e",
+    "text":           "#1f77b4",
+    "table":          "#2ca02c",
+    "figure":         "#9467bd",
+    "caption":        "#8c564b",
+    "page_header":    "#7f7f7f",
+    "page_footer":    "#7f7f7f",
+    "page_number":    "#7f7f7f",
+    "footnote":       "#bcbd22",
+}
+
+fig, ax = plt.subplots(figsize=(9, 12))
+ax.imshow(img)
+ax.set_axis_off()
+ax.set_title(f"ai_parse_document — bounding boxes\n{row.filename} (page 1)", fontsize=11)
+
+seen_types = set()
+for el in elements:
+    el_type = el.get("type", "text")
+    color = type_color.get(el_type, "#000000")
+    for bb in el.get("bbox") or []:
+        if bb.get("page_id") != 0:
+            continue
+        x0, y0, x1, y1 = bb["coord"]
+        ax.add_patch(patches.Rectangle(
+            (x0, y0), x1 - x0, y1 - y0,
+            linewidth=1.4, edgecolor=color, facecolor="none", alpha=0.85,
+        ))
+        seen_types.add(el_type)
+
+legend_handles = [patches.Patch(edgecolor=type_color.get(t, "#000"), facecolor="none", label=t)
+                  for t in sorted(seen_types)]
+ax.legend(handles=legend_handles, loc="lower right", fontsize=8, framealpha=0.9)
+plt.tight_layout()
+plt.show()
 
 # COMMAND ----------
 

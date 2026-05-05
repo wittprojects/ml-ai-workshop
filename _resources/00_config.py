@@ -33,6 +33,8 @@ model_name = f"{catalog}.{schema}.churn_model"
 feature_spec_name = f"{catalog}.{schema}.churn_feature_spec"
 documents_volume = f"{catalog}.{schema}.documents"
 documents_volume_path = f"/Volumes/{catalog}/{schema}/documents"
+documents_source_path = f"{documents_volume_path}/source"
+parsed_images_path = f"{documents_volume_path}/parsed_images"
 
 # COMMAND ----------
 

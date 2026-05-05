@@ -118,17 +118,23 @@ print(f"  Split distribution:\n{labels_pdf['split'].value_counts().to_string()}"
 
 # COMMAND ----------
 
+import os
+
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {documents_volume}")
-print(f"✓ Volume {documents_volume} ready at {documents_volume_path}")
+os.makedirs(documents_source_path, exist_ok=True)
+os.makedirs(parsed_images_path, exist_ok=True)
+print(f"✓ Volume {documents_volume} ready")
+print(f"  source PDFs    → {documents_source_path}")
+print(f"  parsed images  → {parsed_images_path}")
 
 # COMMAND ----------
 
 pdf_files = generate_sample_pdfs(customers_pdf, plans_pdf, seed=42)
 for filename, content in pdf_files:
-    out_path = f"{documents_volume_path}/{filename}"
+    out_path = f"{documents_source_path}/{filename}"
     with open(out_path, "wb") as f:
         f.write(content)
-print(f"✓ Wrote {len(pdf_files)} PDFs to {documents_volume_path}/")
+print(f"✓ Wrote {len(pdf_files)} PDFs to {documents_source_path}/")
 
 # COMMAND ----------
 
