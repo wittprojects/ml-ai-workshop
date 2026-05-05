@@ -406,6 +406,121 @@ display(extracted_df.selectExpr(
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Citations + Confidence Scores (new in `ai_extract` v2.1)
+# MAGIC
+# MAGIC With two extra options the extractor returns, per field, **(a)** a confidence score
+# MAGIC between 0 and 1 and **(b)** a citation pointing back to the source. For VARIANT
+# MAGIC inputs from `ai_parse_document`, citations are bounding boxes — so we can draw them
+# MAGIC straight onto the page image we already rendered.
+# MAGIC
+# MAGIC ```sql
+# MAGIC MAP(
+# MAGIC   'version', '2.1',
+# MAGIC   'enableCitations', 'true',
+# MAGIC   'enableConfidenceScores', 'true'
+# MAGIC )
+# MAGIC ```
+# MAGIC
+# MAGIC The output shape changes: `:response.<field>` is no longer a scalar but an object of
+# MAGIC `{value, citation_ids, confidence_score}`. The bboxes themselves live under
+# MAGIC `:metadata.citations[*]` and join back via `id`.
+# MAGIC
+# MAGIC > **Cost / latency**: Databricks reports ~1.5–3× higher cost when both flags are on
+# MAGIC > (a secondary evaluator pass produces these signals). Best for high-stakes pipelines
+# MAGIC > — financial services, healthcare, insurance — or for human-in-the-loop routing
+# MAGIC > where you auto-approve high-confidence fields and queue the rest for review.
+
+# COMMAND ----------
+
+# DBTITLE 1,Re-run ai_extract on one bill with citations + confidence
+audited_row = spark.sql(f"""
+    SELECT
+        regexp_extract(path, '/([^/]+)$', 1)        AS filename,
+        parsed:document:pages[0]:image_uri::string  AS page0_uri,
+        ai_extract(
+            parsed,
+            '["account_number", "billing_period", "plan_name", "total_due", "payment_due_date", "overage_charges"]',
+            MAP(
+                'version',                '2.1',
+                'enableCitations',        'true',
+                'enableConfidenceScores', 'true',
+                'instructions',
+                'These are telecom monthly billing statements from Northstar Telecom. ' ||
+                'total_due and overage_charges are USD amounts. payment_due_date is the date the customer must pay by.'
+            )
+        ) AS audited
+    FROM {catalog}.{schema}.parsed_documents
+    WHERE path LIKE '%/bill_%'
+    ORDER BY path
+    LIMIT 1
+""").collect()[0]
+
+# Per-field summary: value + confidence + citation count
+fields = ["account_number", "billing_period", "plan_name", "total_due",
+          "payment_due_date", "overage_charges"]
+audited_json = json.loads(audited_row.audited)
+response = audited_json.get("response", {})
+
+field_rows = [
+    {
+        "field":       f,
+        "value":       (response.get(f) or {}).get("value"),
+        "confidence":  (response.get(f) or {}).get("confidence_score"),
+        "citations":   len((response.get(f) or {}).get("citation_ids") or []),
+    }
+    for f in fields
+]
+display(spark.createDataFrame(field_rows))
+
+# COMMAND ----------
+
+# DBTITLE 1,Overlay citations on the page — color-coded by confidence
+img = Image.open(audited_row.page0_uri)
+citations_by_id = {c["id"]: c for c in audited_json.get("metadata", {}).get("citations", [])}
+
+def conf_color(score):
+    if score is None: return "#7f7f7f"
+    if score >= 0.85: return "#2ca02c"   # high — green
+    if score >= 0.60: return "#ff7f0e"   # medium — orange
+    return "#d62728"                     # low — red
+
+fig, ax = plt.subplots(figsize=(9, 12))
+ax.imshow(img)
+ax.set_axis_off()
+ax.set_title(
+    f"ai_extract citations + confidence\n{audited_row.filename} (page 1)",
+    fontsize=11,
+)
+
+for fname in fields:
+    f_obj = response.get(fname) or {}
+    score = f_obj.get("confidence_score")
+    color = conf_color(score)
+    for cid in f_obj.get("citation_ids") or []:
+        for bb in (citations_by_id.get(cid, {}).get("bbox") or []):
+            if bb.get("page_id") != 0:
+                continue
+            x0, y0, x1, y1 = bb["coord"]
+            ax.add_patch(patches.Rectangle(
+                (x0, y0), x1 - x0, y1 - y0,
+                linewidth=2.0, edgecolor=color, facecolor="none", alpha=0.9,
+            ))
+            label = f"{fname} ({score:.2f})" if score is not None else fname
+            ax.text(x0, max(0, y0 - 4), label, fontsize=7,
+                    color="white", bbox=dict(facecolor=color, edgecolor="none", pad=1.5))
+
+legend_handles = [
+    patches.Patch(edgecolor="#2ca02c", facecolor="none", label="high   (≥ 0.85)"),
+    patches.Patch(edgecolor="#ff7f0e", facecolor="none", label="medium (0.60–0.85)"),
+    patches.Patch(edgecolor="#d62728", facecolor="none", label="low    (< 0.60)"),
+]
+ax.legend(handles=legend_handles, loc="lower right", fontsize=8, framealpha=0.9)
+plt.tight_layout()
+plt.show()
+
+# COMMAND ----------
+
 # DBTITLE 1,ai_classify v2 — route documents by type
 # MAGIC %md
 # MAGIC `ai_classify` v2 follows the same shape: VARIANT-friendly content + JSON-string label
@@ -468,6 +583,9 @@ spark.sql(f"""
 # MAGIC The big shift in 2026: `ai_parse_document` outputs a `VARIANT` that flows **natively**
 # MAGIC into `ai_extract`, `ai_classify`, and `ai_query`. One SQL chain takes you from a raw
 # MAGIC PDF in a UC Volume to governed, structured columns in a Delta table — no glue code.
+# MAGIC Pair this with `ai_extract`'s new **citations + confidence scores** and you get an
+# MAGIC auditable pipeline ready for FSI / healthcare / insurance — auto-approve the
+# MAGIC high-confidence rows, route the rest to human review.
 # MAGIC
 # MAGIC These work in **dashboards, pipelines, and scheduled queries** — not just notebooks.
 # MAGIC
