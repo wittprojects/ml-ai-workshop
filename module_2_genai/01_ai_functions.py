@@ -438,7 +438,7 @@ audited_row = spark.sql(f"""
     SELECT
         regexp_extract(path, '/([^/]+)$', 1)        AS filename,
         parsed:document:pages[0]:image_uri::string  AS page0_uri,
-        ai_extract(
+        to_json(ai_extract(
             parsed,
             '["account_number", "billing_period", "plan_name", "total_due", "payment_due_date", "overage_charges"]',
             MAP(
@@ -449,7 +449,7 @@ audited_row = spark.sql(f"""
                 'These are telecom monthly billing statements from Northstar Telecom. ' ||
                 'total_due and overage_charges are USD amounts. payment_due_date is the date the customer must pay by.'
             )
-        ) AS audited
+        )) AS audited
     FROM {catalog}.{schema}.parsed_documents
     WHERE path LIKE '%/bill_%'
     ORDER BY path
