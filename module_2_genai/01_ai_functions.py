@@ -275,50 +275,64 @@ spark.sql(f"""
 
 # COMMAND ----------
 
-# DBTITLE 1,ai_extract — pull structured fields directly from the parsed VARIANT
 # MAGIC %md
-# MAGIC The reworked `ai_extract` (PuPr) takes the parsed `VARIANT` directly. The new
-# MAGIC `instructions` parameter lets you tell the extractor what kind of document it's
-# MAGIC looking at, which dramatically improves accuracy on telecom-specific fields like
-# MAGIC `account_number`, `billing_period`, and `total_due`.
+# MAGIC ### `ai_extract` v2 — pull structured fields directly from the parsed VARIANT
+# MAGIC
+# MAGIC The reworked `ai_extract` (v2.1) accepts the parsed `VARIANT` directly. Two things
+# MAGIC are different from the v1 call we used on raw text earlier:
+# MAGIC
+# MAGIC 1. The schema is a **JSON-encoded string** (`'["field_a", "field_b", ...]'`), not a SQL `ARRAY(...)`. That's how SQL routes the call to v2 instead of v1.
+# MAGIC 2. The `instructions` option lets you describe the document so the extractor can disambiguate fields (e.g., distinguish `total_due` from `overage_charges`).
+# MAGIC
+# MAGIC v2 returns a `VARIANT` shaped `{"response": {field: value, ...}, "error_message": null}`, so we read fields as `bill_fields:response.field_name::string`.
 
 # COMMAND ----------
 
+# DBTITLE 1,ai_extract over the parsed VARIANT
 extracted_df = spark.sql(f"""
     SELECT
         path,
         ai_extract(
             parsed,
-            ARRAY('account_number', 'billing_period', 'plan_name', 'total_due',
-                  'payment_due_date', 'overage_charges'),
-            MAP('instructions',
+            '["account_number", "billing_period", "plan_name", "total_due", "payment_due_date", "overage_charges"]',
+            MAP(
+                'version', '2.1',
+                'instructions',
                 'These are telecom monthly billing statements from Northstar Telecom. ' ||
-                'total_due and overage_charges are USD amounts. payment_due_date is the date the customer must pay by.')
+                'total_due and overage_charges are USD amounts. payment_due_date is the date the customer must pay by.'
+            )
         ) AS bill_fields
     FROM {catalog}.{schema}.parsed_documents
     WHERE path LIKE '%/bill_%'
 """)
 
-display(extracted_df.select(
+display(extracted_df.selectExpr(
     "path",
-    "bill_fields.account_number",
-    "bill_fields.billing_period",
-    "bill_fields.plan_name",
-    "bill_fields.total_due",
-    "bill_fields.payment_due_date",
-    "bill_fields.overage_charges",
+    "bill_fields:response.account_number::string  AS account_number",
+    "bill_fields:response.billing_period::string  AS billing_period",
+    "bill_fields:response.plan_name::string       AS plan_name",
+    "bill_fields:response.total_due::string       AS total_due",
+    "bill_fields:response.payment_due_date::string AS payment_due_date",
+    "bill_fields:response.overage_charges::string AS overage_charges",
 ))
 
 # COMMAND ----------
 
-# DBTITLE 1,ai_classify — route documents by type
+# DBTITLE 1,ai_classify v2 — route documents by type
+# MAGIC %md
+# MAGIC `ai_classify` v2 follows the same shape: VARIANT-friendly content + JSON-string label
+# MAGIC list. Result is a VARIANT with `:response` holding the chosen label.
+
+# COMMAND ----------
+
 classified_df = spark.sql(f"""
     SELECT
         regexp_extract(path, '/([^/]+)$', 1) AS filename,
         ai_classify(
             parsed,
-            ARRAY('bill', 'contract', 'complaint_letter')
-        ) AS doc_type
+            '["bill", "contract", "complaint_letter"]',
+            MAP('version', '2.0')
+        ):response::string AS doc_type
     FROM {catalog}.{schema}.parsed_documents
 """)
 display(classified_df)
