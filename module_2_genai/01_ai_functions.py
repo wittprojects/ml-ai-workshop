@@ -7,13 +7,13 @@
 # MAGIC # Module 2: GenAI Development & Deployment
 # MAGIC ## Notebook 01 — AI Functions
 # MAGIC
-# MAGIC **Time**: ~8 min
+# MAGIC **Time**: ~13 min
 # MAGIC
 # MAGIC Databricks AI Functions bring LLM capabilities directly into SQL. No infrastructure, no prompts engineering frameworks — just SQL.
 # MAGIC
 # MAGIC | Notebook | Topic |
 # MAGIC |----------|-------|
-# MAGIC | **01 AI Functions** | FMAPI, ai_query(), ai_extract() |
+# MAGIC | **01 AI Functions** | FMAPI, ai_query(), ai_extract(), ai_parse_document() |
 # MAGIC | 02 Create Tools | UC functions as agent tools |
 # MAGIC | 03 Agent Eval | mlflow.genai.evaluate() |
 # MAGIC | 04 Metric Views & Genie Room | Governed metrics + NL analytics |
@@ -199,15 +199,173 @@ print(response.choices[0].message.content)
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Document Intelligence: `ai_parse_document` → `ai_extract` → `ai_classify`
+# MAGIC
+# MAGIC The examples above all assume the input is *already* clean text. In the real world,
+# MAGIC most enterprise documents arrive as **PDFs, scanned images, or DOCX files** — bills,
+# MAGIC contracts, complaint letters. Historically, getting these into a SQL-ready shape meant
+# MAGIC stitching together OCR services, layout detection APIs, and figure captioning models.
+# MAGIC
+# MAGIC The new **`ai_parse_document`** function (GA, schema v2.0) collapses that whole stack
+# MAGIC into one SQL call. It returns a `VARIANT` containing text, tables (preserved as
+# MAGIC structures, not flattened), figure descriptions, and bounding-box metadata.
+# MAGIC
+# MAGIC The big upgrade is the **handoff**: the parsed `VARIANT` is the native input to
+# MAGIC `ai_extract`, `ai_classify`, and `ai_query` — no glue code, no manual JSON wrangling.
+# MAGIC
+# MAGIC > **Requirements**: Serverless env v3+ or DBR 17.3+. Max 500 pages / 100 MB per file.
+
+# COMMAND ----------
+
+# DBTITLE 1,Read PDFs from the UC Volume
+documents_df = (
+    spark.read.format("binaryFile")
+    .load(documents_volume_path)
+    .select("path", "length", "content")
+)
+print(f"Loaded {documents_df.count()} documents from {documents_volume_path}")
+display(documents_df.select("path", "length"))
+
+# COMMAND ----------
+
+# DBTITLE 1,ai_parse_document — single SQL call replaces an OCR + layout stack
+from pyspark.sql.functions import expr
+
+parsed_df = documents_df.withColumn(
+    "parsed",
+    expr("ai_parse_document(content, map('version', '2.0'))"),
+)
+
+# Materialize so downstream cells reuse the parse output instead of re-running it
+spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}.parsed_documents")
+(parsed_df
+    .select("path", "parsed")
+    .write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.parsed_documents"))
+
+display(spark.table(f"{catalog}.{schema}.parsed_documents").limit(3))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC The `parsed` column is a versioned `VARIANT` with this shape:
+# MAGIC
+# MAGIC ```text
+# MAGIC parsed.document.pages     — page id + image_uri
+# MAGIC parsed.document.elements  — typed elements: text, table, figure, title, page_header, ...
+# MAGIC parsed.metadata           — file path, name, size, modification time
+# MAGIC parsed.error_status       — non-empty only if a page failed to parse
+# MAGIC ```
+# MAGIC
+# MAGIC Tables come back **structured**, not flattened to raw text — which is the difference
+# MAGIC between an LLM extraction that hallucinates a total and one that quotes the actual
+# MAGIC line item.
+
+# COMMAND ----------
+
+# DBTITLE 1,Inspect element types — tables are preserved as structured elements
+spark.sql(f"""
+    SELECT
+        element:type::string  AS element_type,
+        COUNT(*)              AS count
+    FROM {catalog}.{schema}.parsed_documents,
+         LATERAL view explode(from_json(to_json(parsed:document:elements), 'array<variant>')) AS t AS element
+    GROUP BY 1
+    ORDER BY 2 DESC
+""").display()
+
+# COMMAND ----------
+
+# DBTITLE 1,ai_extract — pull structured fields directly from the parsed VARIANT
+# MAGIC %md
+# MAGIC The reworked `ai_extract` (PuPr) takes the parsed `VARIANT` directly. The new
+# MAGIC `instructions` parameter lets you tell the extractor what kind of document it's
+# MAGIC looking at, which dramatically improves accuracy on telecom-specific fields like
+# MAGIC `account_number`, `billing_period`, and `total_due`.
+
+# COMMAND ----------
+
+extracted_df = spark.sql(f"""
+    SELECT
+        path,
+        ai_extract(
+            parsed,
+            ARRAY('account_number', 'billing_period', 'plan_name', 'total_due',
+                  'payment_due_date', 'overage_charges'),
+            MAP('instructions',
+                'These are telecom monthly billing statements from Northstar Telecom. ' ||
+                'total_due and overage_charges are USD amounts. payment_due_date is the date the customer must pay by.')
+        ) AS bill_fields
+    FROM {catalog}.{schema}.parsed_documents
+    WHERE path LIKE '%/bill_%'
+""")
+
+display(extracted_df.select(
+    "path",
+    "bill_fields.account_number",
+    "bill_fields.billing_period",
+    "bill_fields.plan_name",
+    "bill_fields.total_due",
+    "bill_fields.payment_due_date",
+    "bill_fields.overage_charges",
+))
+
+# COMMAND ----------
+
+# DBTITLE 1,ai_classify — route documents by type
+classified_df = spark.sql(f"""
+    SELECT
+        regexp_extract(path, '/([^/]+)$', 1) AS filename,
+        ai_classify(
+            parsed,
+            ARRAY('bill', 'contract', 'complaint_letter')
+        ) AS doc_type
+    FROM {catalog}.{schema}.parsed_documents
+""")
+display(classified_df)
+
+# COMMAND ----------
+
+# DBTITLE 1,ai_query — free-form Q&A over the same parsed output
+# MAGIC %md
+# MAGIC The same `VARIANT` flows into `ai_query` for narrative answers. Here, we summarize the
+# MAGIC dispute reason from the complaint letter — the LLM reads the structured parse, not
+# MAGIC raw OCR noise.
+
+# COMMAND ----------
+
+spark.sql(f"""
+    SELECT
+        regexp_extract(path, '/([^/]+)$', 1) AS filename,
+        ai_query(
+            '{llm_endpoint}',
+            CONCAT(
+                'Read this customer-submitted document. In one sentence, state the customer''s ',
+                'primary complaint and the resolution they are requesting. Document content: ',
+                to_json(parsed:document:elements)
+            )
+        ) AS dispute_summary
+    FROM {catalog}.{schema}.parsed_documents
+    WHERE path LIKE '%/complaint_%'
+""").display()
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Summary
 # MAGIC
 # MAGIC AI Functions bring LLM capabilities to SQL with zero infrastructure:
 # MAGIC
 # MAGIC | Function | Use Case | Example |
 # MAGIC |----------|----------|---------|
-# MAGIC | `ai_sentiment()` | Built-in sentiment | No config needed |
+# MAGIC | `ai_analyze_sentiment()` | Built-in sentiment | No config needed |
 # MAGIC | `ai_query()` | Custom LLM prompts | Classification, summarization, explanation |
-# MAGIC | `ai_extract()` | Structured extraction | Pull fields from free text |
+# MAGIC | `ai_extract()` | Structured extraction | Pull fields from free text **or parsed PDFs** |
+# MAGIC | `ai_classify()` | Bucket routing | Route docs by type |
+# MAGIC | `ai_parse_document()` | PDF / image → `VARIANT` | Replaces OCR + layout + caption stack |
+# MAGIC
+# MAGIC The big shift in 2026: `ai_parse_document` outputs a `VARIANT` that flows **natively**
+# MAGIC into `ai_extract`, `ai_classify`, and `ai_query`. One SQL chain takes you from a raw
+# MAGIC PDF in a UC Volume to governed, structured columns in a Delta table — no glue code.
 # MAGIC
 # MAGIC These work in **dashboards, pipelines, and scheduled queries** — not just notebooks.
 # MAGIC

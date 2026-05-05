@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Module 2: GenAI Development & Deployment
 # MAGIC ## Notebook 04 — Metric Views & Genie Room
@@ -16,7 +20,7 @@
 # MAGIC
 # MAGIC | Notebook | Topic |
 # MAGIC |----------|-------|
-# MAGIC | 01 AI Functions | FMAPI, ai_query(), ai_extract() |
+# MAGIC | 01 AI Functions | FMAPI, ai_query(), ai_extract(), ai_parse_document() |
 # MAGIC | 02 Create Tools | UC functions as agent tools |
 # MAGIC | 03 Agent Eval | mlflow.genai.evaluate() |
 # MAGIC | **04 Metric Views & Genie Room** | Governed metrics + NL analytics |

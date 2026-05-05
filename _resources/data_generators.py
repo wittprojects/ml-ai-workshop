@@ -648,3 +648,231 @@ def generate_churn_labels(customers_df, seed=42):
     labels["split"] = splits
 
     return labels
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Sample Telecom PDFs (for `ai_parse_document` demo)
+# MAGIC
+# MAGIC Renders a small set of realistic-looking telecom documents — bills with itemized tables,
+# MAGIC a service contract, and a billing-dispute letter — using `reportlab`. Returns an
+# MAGIC in-memory list of `(filename, bytes)` tuples so the caller decides where to write them.
+
+# COMMAND ----------
+
+def generate_sample_pdfs(customers_df, plans_df, seed=42):
+    """Render a small portfolio of telecom PDFs for the document intelligence demo.
+
+    Returns a list of (filename, bytes) tuples covering: 5 customer bills, 1 contract,
+    and 1 complaint letter. Values are pulled from the same customers / plans frames
+    used by the Delta tables, so the PDFs are consistent with the rest of the workshop.
+    """
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Paragraph,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    rng = np.random.default_rng(seed)
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], textColor=colors.HexColor("#0b3d91"))
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], textColor=colors.HexColor("#1f4e8a"))
+    body = styles["BodyText"]
+
+    def _build(story):
+        buf = BytesIO()
+        doc = SimpleDocTemplate(
+            buf, pagesize=LETTER,
+            leftMargin=0.75 * inch, rightMargin=0.75 * inch,
+            topMargin=0.75 * inch, bottomMargin=0.75 * inch,
+        )
+        doc.build(story)
+        return buf.getvalue()
+
+    def _table_style():
+        return TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0b3d91")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f6fb")]),
+            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ])
+
+    # ---- Pick 5 customers: 3 churners + 2 non-churners for variety ----
+    churners = customers_df[customers_df["churn"] == "Yes"].head(3)
+    keepers = customers_df[customers_df["churn"] == "No"].head(2)
+    selected = pd.concat([churners, keepers]).reset_index(drop=True)
+
+    plan_pool = plans_df[plans_df["monthly_cost"].between(30, 110)].reset_index(drop=True)
+
+    files = []
+    bill_anchor_account = None  # used by the complaint letter to reference a real bill
+
+    # ---- 5 customer bills ----
+    for idx, cust in selected.iterrows():
+        plan = plan_pool.iloc[idx % len(plan_pool)]
+        account_number = f"ACCT-{int(cust['customer_id'].split('-')[1]):07d}"
+        billing_period = "Apr 1, 2026 – Apr 30, 2026"
+        statement_date = "May 5, 2026"
+        due_date = "May 25, 2026"
+
+        monthly = float(cust["monthly_charges"])
+        usage_data = round(rng.uniform(40, 480), 1)
+        usage_voice = int(rng.integers(120, 900))
+        usage_sms = int(rng.integers(50, 750))
+        equipment_fee = round(rng.uniform(8, 18), 2)
+        regulatory_fee = round(monthly * 0.022, 2)
+        taxes = round(monthly * 0.078, 2)
+        overage = round(rng.uniform(0, 22), 2) if rng.random() < 0.4 else 0.0
+        total_due = round(monthly + equipment_fee + regulatory_fee + taxes + overage, 2)
+
+        story = [
+            Paragraph("Northstar Telecom", h1),
+            Paragraph("Monthly Statement", h2),
+            Spacer(1, 8),
+            Paragraph(
+                f"<b>Account holder:</b> {cust['name']}<br/>"
+                f"<b>Account number:</b> {account_number}<br/>"
+                f"<b>Statement date:</b> {statement_date}<br/>"
+                f"<b>Billing period:</b> {billing_period}<br/>"
+                f"<b>Payment due:</b> {due_date}",
+                body,
+            ),
+            Spacer(1, 14),
+            Paragraph("Current Plan", h2),
+            Paragraph(
+                f"<b>{plan['plan_name']}</b> — {plan['features_description']}<br/>"
+                f"Contract term: {plan['contract_term']}.",
+                body,
+            ),
+            Spacer(1, 14),
+            Paragraph("Usage Summary", h2),
+            Table(
+                [
+                    ["Service", "Included", "Used", "Overage"],
+                    ["Voice (minutes)", "Unlimited", f"{usage_voice}", "0"],
+                    ["SMS (messages)", "Unlimited", f"{usage_sms}", "0"],
+                    ["Data (GB)", "Unlimited" if plan["data_limit_gb"] == -1 else f"{plan['data_limit_gb']}", f"{usage_data}", f"{max(0, usage_data - (plan['data_limit_gb'] if plan['data_limit_gb'] > 0 else usage_data)):.1f}"],
+                ],
+                colWidths=[1.9 * inch, 1.5 * inch, 1.4 * inch, 1.2 * inch],
+                style=_table_style(),
+            ),
+            Spacer(1, 14),
+            Paragraph("Charges", h2),
+            Table(
+                [
+                    ["Line item", "Amount (USD)"],
+                    [f"{plan['plan_name']} monthly service", f"${monthly:.2f}"],
+                    ["Equipment rental", f"${equipment_fee:.2f}"],
+                    ["Regulatory recovery fee", f"${regulatory_fee:.2f}"],
+                    ["Federal & state taxes", f"${taxes:.2f}"],
+                    ["Overage charges", f"${overage:.2f}"],
+                    ["Total due", f"${total_due:.2f}"],
+                ],
+                colWidths=[4.5 * inch, 1.5 * inch],
+                style=_table_style(),
+            ),
+            Spacer(1, 16),
+            Paragraph(
+                "Pay online at northstartelecom.example/pay or call 1-800-555-0199. "
+                "Late payments after the due date incur a $10.00 service fee.",
+                body,
+            ),
+        ]
+        files.append((f"bill_{account_number}.pdf", _build(story)))
+        if bill_anchor_account is None:
+            bill_anchor_account = account_number
+            bill_anchor_total = total_due
+            bill_anchor_overage = overage
+            bill_anchor_customer = cust["name"]
+
+    # ---- 1 service contract ----
+    contract_customer = selected.iloc[0]
+    contract_plan = plan_pool.iloc[0]
+    contract_account = f"ACCT-{int(contract_customer['customer_id'].split('-')[1]):07d}"
+    story = [
+        Paragraph("Northstar Telecom — Service Agreement", h1),
+        Spacer(1, 6),
+        Paragraph(
+            f"<b>Customer:</b> {contract_customer['name']}<br/>"
+            f"<b>Account number:</b> {contract_account}<br/>"
+            f"<b>Effective date:</b> January 15, 2026<br/>"
+            f"<b>End date:</b> January 14, 2027<br/>"
+            f"<b>Contract type:</b> One-year fixed-term agreement",
+            body,
+        ),
+        Spacer(1, 12),
+        Paragraph("Plan & Pricing", h2),
+        Table(
+            [
+                ["Plan", "Monthly cost", "Term"],
+                [contract_plan["plan_name"], f"${contract_plan['monthly_cost']:.2f}", contract_plan["contract_term"]],
+            ],
+            colWidths=[3.0 * inch, 1.6 * inch, 1.6 * inch],
+            style=_table_style(),
+        ),
+        Spacer(1, 12),
+        Paragraph("Key Terms", h2),
+        Paragraph(
+            "1. Service will be provided at the rate above for the full contract term. "
+            "2. Early termination by the customer prior to the end date is subject to an early termination fee equal to $10 per remaining month. "
+            "3. Customer may upgrade their plan at any time without penalty; downgrades take effect at the next billing cycle. "
+            "4. Equipment provided remains the property of Northstar Telecom and must be returned within 14 days of cancellation. "
+            "5. Outages exceeding 24 continuous hours qualify the customer for a prorated service credit upon request.",
+            body,
+        ),
+    ]
+    files.append((f"contract_{contract_account}.pdf", _build(story)))
+
+    # ---- 1 billing dispute letter ----
+    story = [
+        Paragraph("Billing Dispute", h1),
+        Spacer(1, 6),
+        Paragraph(
+            f"<b>From:</b> {bill_anchor_customer}<br/>"
+            f"<b>Account number:</b> {bill_anchor_account}<br/>"
+            f"<b>Date:</b> May 7, 2026<br/>"
+            f"<b>Re:</b> Disputed charges on the April 2026 statement",
+            body,
+        ),
+        Spacer(1, 14),
+        Paragraph(
+            f"To Whom It May Concern,",
+            body,
+        ),
+        Spacer(1, 6),
+        Paragraph(
+            f"I am writing to formally dispute the overage charges of ${bill_anchor_overage:.2f} "
+            f"on my April 2026 statement (account {bill_anchor_account}, total billed "
+            f"${bill_anchor_total:.2f}). My current plan is sold as unlimited data, and I have "
+            f"never received a notice that overage rules apply to my account. When I called "
+            f"customer service on May 3, the representative was unable to explain the basis "
+            f"for the charge and suggested I file this written dispute.",
+            body,
+        ),
+        Spacer(1, 6),
+        Paragraph(
+            "I am requesting a full reversal of the disputed amount and written confirmation "
+            "that no further overage charges will be applied to my account. If this is not "
+            "resolved within 14 business days, I will be evaluating other providers, including "
+            "the competitor who has been actively reaching out to my household.",
+            body,
+        ),
+        Spacer(1, 14),
+        Paragraph(f"Sincerely,<br/>{bill_anchor_customer}", body),
+    ]
+    files.append((f"complaint_{bill_anchor_account}.pdf", _build(story)))
+
+    return files

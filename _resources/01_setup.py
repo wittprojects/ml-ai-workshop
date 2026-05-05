@@ -16,7 +16,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install faker databricks-sdk==0.50.0 -q
+# MAGIC %pip install faker databricks-sdk==0.50.0 reportlab==4.2.5 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -106,6 +106,29 @@ labels_pdf = generate_churn_labels(customers_pdf, seed=42)
 spark.createDataFrame(labels_pdf).write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.churn_labels")
 print(f"✓ churn_labels table: {spark.table(f'{catalog}.{schema}.churn_labels').count()} rows")
 print(f"  Split distribution:\n{labels_pdf['split'].value_counts().to_string()}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 2b. Generate Sample PDFs (for `ai_parse_document` demo)
+# MAGIC
+# MAGIC Renders a small portfolio of telecom documents (5 bills, 1 contract, 1 complaint
+# MAGIC letter) into a Unity Catalog Volume. These power the document intelligence section
+# MAGIC of `module_2_genai/01_ai_functions.py`.
+
+# COMMAND ----------
+
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {documents_volume}")
+print(f"✓ Volume {documents_volume} ready at {documents_volume_path}")
+
+# COMMAND ----------
+
+pdf_files = generate_sample_pdfs(customers_pdf, plans_pdf, seed=42)
+for filename, content in pdf_files:
+    out_path = f"{documents_volume_path}/{filename}"
+    with open(out_path, "wb") as f:
+        f.write(content)
+print(f"✓ Wrote {len(pdf_files)} PDFs to {documents_volume_path}/")
 
 # COMMAND ----------
 
@@ -204,6 +227,10 @@ for table in tables:
     spark.sql(f"GRANT SELECT ON TABLE {catalog}.{schema}.{table} TO `account users`")
     print(f"  ✓ SELECT granted on {table}")
 
+# Grant READ on the documents volume
+spark.sql(f"GRANT READ VOLUME ON VOLUME {documents_volume} TO `account users`")
+print(f"  ✓ READ VOLUME granted on {documents_volume}")
+
 # Grant EXECUTE on functions (will be created later in Module 2)
 # These grants will be applied when the functions are created
 
@@ -226,6 +253,7 @@ print(f"\n✓ All permissions granted to `account users`")
 # MAGIC | policies (8 rows) | ✓ Written |
 # MAGIC | product_knowledge (50 rows) | ✓ Written |
 # MAGIC | churn_labels (5,000 rows) | ✓ Written |
+# MAGIC | documents volume (7 PDFs) | ✓ Written |
 # MAGIC | Vector Search Endpoint | ✓ Online |
 # MAGIC | Vector Search Index | ✓ Synced |
 # MAGIC | Permissions | ✓ Granted |

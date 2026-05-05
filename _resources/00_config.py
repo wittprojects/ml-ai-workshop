@@ -31,6 +31,8 @@ online_store_name = "workshop-online-store"
 feature_table_name = f"{catalog}.{schema}.churn_feature_table"
 model_name = f"{catalog}.{schema}.churn_model"
 feature_spec_name = f"{catalog}.{schema}.churn_feature_spec"
+documents_volume = f"{catalog}.{schema}.documents"
+documents_volume_path = f"/Volumes/{catalog}/{schema}/documents"
 
 # COMMAND ----------
 
