@@ -23,7 +23,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk>=0.50.0 mlflow -q
+# MAGIC %pip install databricks-sdk==0.102.0 mlflow==3.8.1 scikit-learn==1.6.1 lightgbm==4.6.0 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -39,19 +39,29 @@ from databricks.sdk.service.catalog import (
     MonitorMetric,
     MonitorMetricType,
 )
-from databricks.feature_engineering import FeatureEngineeringClient
 from pyspark.sql import functions as F
 import mlflow
 from mlflow.tracking import MlflowClient
 import time
 
 w = WorkspaceClient()
-fe = FeatureEngineeringClient()
 mlflow.set_registry_uri("databricks-uc")
 mlflow_client = MlflowClient()
 
-predictions_table = f"{catalog}.{schema}.churn_predictions"
+predictions_table = predictions_table_name
 spark.sql(f"ALTER TABLE {predictions_table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+
+# Ensure prediction column is DOUBLE — monitor requires prediction & label types to match.
+pred_type = next(
+    f.dataType.simpleString()
+    for f in spark.table(predictions_table).schema.fields
+    if f.name == "prediction"
+)
+if pred_type != "double":
+    print(f"Casting prediction from {pred_type} → double")
+    casted = spark.table(predictions_table).withColumn("prediction", F.col("prediction").cast("double"))
+    casted.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(predictions_table)
+    spark.sql(f"ALTER TABLE {predictions_table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
 
 baseline_table = f"{catalog}.{schema}.churn_predictions_baseline"
 
@@ -71,12 +81,37 @@ monitor_model_id = f"{model_name} version {champion_version}"
 
 # COMMAND ----------
 
-# Score training split to create baseline
+# Score training split to create baseline — join labels to features, then predict.
 train_labels = spark.table("churn_labels").filter("split = 'train'").select("customer_id")
+features = spark.table(feature_table_name).drop("update_timestamp")
+train_df = (
+    train_labels
+    .join(features, on="customer_id", how="inner")
+    .withColumn(
+        "avg_price_increase",
+        F.expr(f"{catalog}.{schema}.avg_price_increase(monthly_charges, tenure_months)")
+    )
+)
 
-baseline_df = fe.score_batch(
-    model_uri=f"models:/{model_name}@Champion",
-    df=train_labels,
+model = mlflow.sklearn.load_model(f"models:/{model_name}@Champion")
+feature_cols = [c for c in train_df.columns if c != "customer_id"]
+
+train_pdf = train_df.toPandas()
+# Cast prediction to float — monitor requires prediction and label types to match (both DOUBLE).
+train_pdf["prediction"] = model.predict(train_pdf[feature_cols]).astype("float64")
+train_pdf["churn_probability"] = model.predict_proba(train_pdf[feature_cols])[:, 1]
+# True label for the training rows — Yes=1.0, No=0.0 (matches model encoding).
+# The monitor's label_col must exist in BOTH the predictions and baseline tables.
+churn_yes_no = (
+    spark.table("churn_labels")
+    .filter("split = 'train'")
+    .select("customer_id", F.when(F.col("churn") == "Yes", 1.0).otherwise(0.0).alias("churn_label"))
+    .toPandas()
+)
+train_pdf = train_pdf.merge(churn_yes_no, on="customer_id", how="left")
+
+baseline_df = spark.createDataFrame(
+    train_pdf[["customer_id"] + feature_cols + ["prediction", "churn_probability", "churn_label"]]
 )
 
 # Add monitoring columns — fixed timestamp for the baseline window
@@ -86,7 +121,7 @@ baseline_df = (
     .withColumn("model_id", F.lit(monitor_model_id))
 )
 
-baseline_df.write.mode("overwrite").saveAsTable(baseline_table)
+baseline_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(baseline_table)
 print(f"Baseline table created: {baseline_table} ({spark.table(baseline_table).count()} rows)")
 
 # COMMAND ----------
@@ -243,18 +278,25 @@ assert monitor_info.status == MonitorInfoStatus.MONITOR_STATUS_ACTIVE, "Error cr
 w.quality_monitors.run_refresh(table_name=predictions_table)
 print("Monitor refresh triggered — this takes ~10 minutes...")
 
+_TERMINAL_OK = {"SUCCESS", "SUCCEEDED"}
+_TERMINAL_BAD = {"FAILED", "CANCELLED", "CANCELED"}
+
 while True:
     refreshes_response = w.quality_monitors.list_refreshes(table_name=predictions_table)
-    active = [r for r in refreshes_response.refreshes if r.state in ("PENDING", "RUNNING")]
+    active = [r for r in refreshes_response.refreshes if str(r.state) in ("PENDING", "RUNNING")]
     if not active:
         latest = sorted(refreshes_response.refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
-        print(f"Refresh complete — state: {latest.state}")
-        if latest.state == "SUCCEEDED":
+        state_str = str(latest.state)
+        print(f"Refresh complete — state: {state_str}")
+        if state_str in _TERMINAL_OK:
             print("Monitor refresh succeeded.")
             break
-        elif latest.state in ("FAILED", "CANCELLED"):
-            print(f"Monitor refresh ended with state: {latest.state}")
+        if state_str in _TERMINAL_BAD:
+            print(f"Monitor refresh ended with state: {state_str}")
             break
+        # Unknown terminal state — bail rather than spin
+        print(f"Unknown terminal state '{state_str}' — exiting wait loop")
+        break
     print(f"  Still running... ({time.strftime('%H:%M:%S')})")
     time.sleep(30)
 
@@ -267,7 +309,7 @@ w.quality_monitors.get(table_name=predictions_table)
 # MAGIC %md
 # MAGIC ## 5. Analyze Profile Metrics
 # MAGIC
-# MAGIC The monitor creates a `_profile_metrics` table with **per-column statistics for each time window** — count, mean, stddev, min, max, quantiles, percent nulls, and more.
+# MAGIC The monitor creates a `_profile_metrics` table with **per-column statistics for each time window** — count, avg, stddev, min, max, quantiles, percent zeros, and more.
 
 # COMMAND ----------
 
@@ -282,8 +324,8 @@ display(spark.sql(f"""
 
 display(spark.sql(f"""
     SELECT window, column_name,
-           count, mean, stddev, min, max,
-           percent_zeros, percent_nulls
+           count, avg, stddev, min, max,
+           percent_zeros
     FROM {catalog}.{schema}.churn_predictions_profile_metrics
     WHERE column_name IN ('monthly_charges', 'tenure_months', 'contract_type', 'prediction')
       AND slice_key IS NULL
@@ -422,11 +464,11 @@ print("This takes 1-3 minutes. You can continue reading while it runs.")
 # Model quality metrics (run after refresh completes)
 display(spark.sql(f"""
     SELECT window,
-           accuracy, precision, recall, f1_score, log_loss
+           accuracy_score, precision, recall, f1_score, log_loss
     FROM {catalog}.{schema}.churn_predictions_profile_metrics
     WHERE column_name = 'prediction'
       AND slice_key IS NULL
-      AND accuracy IS NOT NULL
+      AND accuracy_score IS NOT NULL
     ORDER BY window
 """))
 

@@ -212,23 +212,21 @@ conda_env = {
     "dependencies": [
         "python=3.12.3",
         "pip<=25.0.1",
-        "mlflow==3.8.1",
         {
             "pip": [
+                "mlflow==3.8.1",
                 "scikit-learn==1.6.1",
                 "lightgbm==4.6.0",
                 "pyarrow==21.0.0",
                 "cloudpickle==3.0.0",
-                "databricks-feature-lookup",
             ]
         },
     ],
     "name": "mlflow-env",
 }
 
-# For Feature Store models, the input_example should contain only the lookup keys
-# since the endpoint handles feature retrieval from the online table automatically
-input_example = labels_df.select("customer_id").limit(5).toPandas()
+# Input example: a few rows of the feature vector the model expects at inference time.
+input_example = X_val.head(5)
 
 with mlflow.start_run(run_name="final_model") as run:
     final_pipeline.fit(X_train, y_train)
@@ -248,18 +246,11 @@ with mlflow.start_run(run_name="final_model") as run:
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}")
 
-    # Log with Feature Engineering client for lineage
-    # Override pyarrow pin from cluster env to avoid conflict with databricks-feature-lookup at serving time
-    import os
-    os.environ["MLFLOW_REQUIREMENTS_INFERENCE_RAISE_ERRORS"] = "false"
-    fe.log_model(
-        model=final_pipeline,
+    mlflow.sklearn.log_model(
+        sk_model=final_pipeline,
         artifact_path="final_model",
-        flavor=mlflow.sklearn,
-        training_set=training_set,
         input_example=input_example,
         conda_env=conda_env,
-        registered_model_name=None,  # Registration happens in the cell below
     )
 
     final_run_id = run.info.run_id
@@ -268,17 +259,12 @@ with mlflow.start_run(run_name="final_model") as run:
 # COMMAND ----------
 
 # DBTITLE 1,Smoke test model before registration
-# Smoke test: validate the model loads and produces predictions
-# Note: mlflow.models.predict() can't be used with Feature Store models because
-# the local subprocess can't connect to the online store for feature lookups.
-# Use fe.score_batch() instead — it resolves features from the offline table via Spark.
-test_df = spark.createDataFrame([("CUST-00001",)], ["customer_id"])
-predictions = fe.score_batch(
-    model_uri=f"runs:/{final_run_id}/final_model",
-    df=test_df,
-)
+# Load the logged model and predict against a few rows of the validation set.
+loaded_model = mlflow.sklearn.load_model(f"runs:/{final_run_id}/final_model")
+preds = loaded_model.predict(X_val.head(5))
+probs = loaded_model.predict_proba(X_val.head(5))[:, 1]
 print("✓ Smoke test passed!")
-display(predictions)
+display(pd.DataFrame({"prediction": preds, "churn_probability": probs}))
 
 # COMMAND ----------
 
@@ -393,7 +379,7 @@ print(f"Best run_id saved: {final_run_id}")
 # MAGIC We trained a LightGBM churn prediction model:
 # MAGIC - **Optuna** explored 20 hyperparameter combinations
 # MAGIC - All trials logged to **MLflow** with full tracking
-# MAGIC - **Feature Store** lineage preserved via `fe.log_model()`
+# MAGIC - **Feature Store** lineage preserved via `fe.create_training_set()`
 # MAGIC - **SHAP** revealed the most important churn drivers
 # MAGIC
 # MAGIC **Next**: [03a Genie Code Alternative →](./03a_genie_code_alternative) or [04 Model Serving →](./04_model_serving)

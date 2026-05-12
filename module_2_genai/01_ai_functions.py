@@ -282,8 +282,8 @@ spark.sql(f"""
     SELECT
         element:type::string  AS element_type,
         COUNT(*)              AS count
-    FROM {catalog}.{schema}.parsed_documents,
-         LATERAL view explode(from_json(to_json(parsed:document:elements), 'array<variant>')) AS t AS element
+    FROM {catalog}.{schema}.parsed_documents
+    LATERAL VIEW explode(from_json(to_json(parsed:document:elements), 'array<variant>')) t AS element
     GROUP BY 1
     ORDER BY 2 DESC
 """).display()
@@ -462,11 +462,14 @@ fields = ["account_number", "billing_period", "plan_name", "total_due",
 audited_json = json.loads(audited_row.audited)
 response = audited_json.get("response", {})
 
+def _to_float(x):
+    return float(x) if x is not None else None
+
 field_rows = [
     {
         "field":       f,
         "value":       (response.get(f) or {}).get("value"),
-        "confidence":  (response.get(f) or {}).get("confidence_score"),
+        "confidence":  _to_float((response.get(f) or {}).get("confidence_score")),
         "citations":   len((response.get(f) or {}).get("citation_ids") or []),
     }
     for f in fields

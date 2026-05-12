@@ -137,34 +137,31 @@ display(spark.sql(f"SELECT * FROM {catalog}.{schema}.get_retention_policy()"))
 # MAGIC %md
 # MAGIC ## Tool 5: `get_churn_risk()`
 # MAGIC
-# MAGIC This calls the Module 1 serving endpoint to get a real-time churn prediction!
+# MAGIC Looks up the pre-computed churn probability for a customer from the batch-scored
+# MAGIC `churn_predictions` table built in Module 1, notebook 05.
 
 # COMMAND ----------
 
-try:
-    spark.sql(f"""
-    CREATE OR REPLACE FUNCTION {catalog}.{schema}.get_churn_risk(customer_id_param STRING)
-    RETURNS STRING
-    LANGUAGE SQL
-    COMMENT 'Calls the churn prediction model serving endpoint and returns the churn risk prediction for a given customer_id.'
-    RETURN
-      SELECT ai_query(
-        '{churn_model_serving_endpoint}',
-        named_struct('customer_id', customer_id_param)
-      )
-    """)
-    print(f"✓ Created {catalog}.{schema}.get_churn_risk()")
-except Exception as e:
-    print(f"Note: get_churn_risk creation skipped — serving endpoint '{churn_model_serving_endpoint}' not active yet")
-    print(f"  Run Module 1 notebook 05 first, then re-run this cell")
+spark.sql(f"""
+CREATE OR REPLACE FUNCTION {catalog}.{schema}.get_churn_risk(customer_id_param STRING)
+RETURNS DOUBLE
+LANGUAGE SQL
+COMMENT 'Returns the pre-computed churn probability (0.0-1.0) for the given customer_id from the batch predictions table.'
+RETURN
+  SELECT MAX(churn_probability)
+  FROM {predictions_table_name}
+  WHERE customer_id = customer_id_param
+""")
+print(f"✓ Created {catalog}.{schema}.get_churn_risk()")
 
 # COMMAND ----------
 
-# Test (requires the serving endpoint from Module 1 to be active)
-try:
-    display(spark.sql(f"SELECT {catalog}.{schema}.get_churn_risk('CUST-00001') as churn_risk"))
-except Exception as e:
-    print(f"Note: get_churn_risk test skipped — serving endpoint not active")
+# Test against a customer that exists in the predictions table.
+sample_customer_id = spark.table(predictions_table_name).limit(1).collect()[0]["customer_id"]
+display(spark.sql(
+    f"SELECT '{sample_customer_id}' as customer_id, "
+    f"{catalog}.{schema}.get_churn_risk('{sample_customer_id}') as churn_risk"
+))
 
 # COMMAND ----------
 

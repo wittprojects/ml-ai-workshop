@@ -9,13 +9,12 @@
 # MAGIC
 # MAGIC **Time**: ~5 min
 # MAGIC
-# MAGIC Two approaches to batch scoring:
-# MAGIC 1. **Python**: `fe.score_batch()` with Feature Store lineage
-# MAGIC
+# MAGIC We'll score the test split of customers and write a `churn_predictions` table.
+# MAGIC In Module 2 the retention agent reads this table directly (pre-computed scores pattern).
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering>=0.14.0 databricks-sdk>=0.50.0 lightgbm==4.6.0 mlflow==3.8.1 uv -q
+# MAGIC %pip install lightgbm==4.6.0 mlflow==3.8.1 scikit-learn==1.6.1 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -24,44 +23,87 @@
 
 # COMMAND ----------
 
-from databricks.feature_engineering import FeatureEngineeringClient
 import mlflow
+import pandas as pd
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, DoubleType
 
-fe = FeatureEngineeringClient()
+mlflow.set_registry_uri("databricks-uc")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Approach 1: `fe.score_batch()` (Python)
+# MAGIC ## 1. Assemble Inference Data
 # MAGIC
-# MAGIC This automatically looks up features from the feature table and applies the model — all with lineage tracking.
+# MAGIC Join the test-split customers to the offline feature table to get the feature vector each row needs.
 
 # COMMAND ----------
 
-# Load test labels (customers we haven't scored yet)
 test_labels = spark.table("churn_labels").filter("split = 'test'").select("customer_id")
-print(f"Test customers to score: {test_labels.count()}")
+features = spark.table(feature_table_name).drop("update_timestamp")
 
-# COMMAND ----------
-
-# Score batch using the Champion model
-batch_predictions = fe.score_batch(
-    model_uri=f"models:/{model_name}@Champion",
-    df=test_labels,
-    env_manager="uv"
+inference_df = (
+    test_labels
+    .join(features, on="customer_id", how="inner")
+    # Compute the on-demand feature `avg_price_increase` via the UDF created in nb 02.
+    .withColumn(
+        "avg_price_increase",
+        F.expr(f"{catalog}.{schema}.avg_price_increase(monthly_charges, tenure_months)")
+    )
 )
-
-display(batch_predictions.limit(10))
+print(f"Test customers to score: {inference_df.count()}")
+display(inference_df.limit(5))
 
 # COMMAND ----------
 
-# Save predictions for monitoring
+# MAGIC %md
+# MAGIC ## 2. Load the Champion Model and Score
+
+# COMMAND ----------
+
+model_uri = f"models:/{model_name}@Champion"
+model = mlflow.sklearn.load_model(model_uri)
+feature_cols = [c for c in inference_df.columns if c != "customer_id"]
+
+# Bring features to pandas for scoring (test set is small — fine for the workshop)
+pdf = inference_df.toPandas()
+X = pdf[feature_cols]
+
+# Cast prediction to float — monitoring requires prediction and label types to match (both DOUBLE).
+pdf["prediction"] = model.predict(X).astype("float64")
+pdf["churn_probability"] = model.predict_proba(X)[:, 1]
+
+# Keep features alongside predictions — Notebook 06 (monitoring) reads them
+# to compute drift metrics on feature distributions.
+output_cols = ["customer_id"] + feature_cols + ["prediction", "churn_probability"]
+predictions_df = spark.createDataFrame(pdf[output_cols])
+display(predictions_df.limit(10))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 3. Write the Predictions Table
+
+# COMMAND ----------
+
 (
-    batch_predictions
+    predictions_df
     .write
     .mode("overwrite")
-    .saveAsTable(f"{catalog}.{schema}.churn_predictions")
+    .option("overwriteSchema", "true")
+    .saveAsTable(predictions_table_name)
 )
 
-print(f"✓ Predictions saved to {catalog}.{schema}.churn_predictions")
-print(f"  Total predictions: {spark.table(f'{catalog}.{schema}.churn_predictions').count()}")
+print(f"✓ Predictions saved to {predictions_table_name}")
+print(f"  Total predictions: {spark.table(predictions_table_name).count()}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Summary
+# MAGIC
+# MAGIC - Joined the test split to the **offline feature table** to build the inference DataFrame
+# MAGIC - Loaded the **Champion** model from Unity Catalog and scored it
+# MAGIC - Wrote `churn_predictions` to UC — the agent in Module 2 reads from this table
+# MAGIC
+# MAGIC **Next**: [06 Monitoring →](./06_monitoring)

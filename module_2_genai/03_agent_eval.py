@@ -19,7 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-langchain langgraph "mlflow[genai]" databricks-sdk>=0.50.0 -q
+# MAGIC %pip install databricks-langchain "langgraph>1" "mlflow[genai]" databricks-sdk -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -41,7 +41,8 @@ mlflow.set_experiment(experiment_path)
 # COMMAND ----------
 
 from databricks_langchain import ChatDatabricks, UCFunctionToolkit, VectorSearchRetrieverTool
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+from mlflow.entities import SpanType
 
 llm = ChatDatabricks(endpoint=llm_endpoint)
 
@@ -76,11 +77,82 @@ When a customer calls in, follow this workflow:
 
 Always be empathetic and solution-oriented. Provide specific, actionable recommendations."""
 
-agent = create_react_agent(
-    model=llm,
-    tools=uc_toolkit.tools + [vs_tool],
-    prompt=SYSTEM_PROMPT,
-)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Instrumenting the agent with MLflow tracing
+# MAGIC
+# MAGIC We wrap the ReAct loop with three kinds of MLflow spans:
+# MAGIC
+# MAGIC | Span | Type | Purpose |
+# MAGIC |------|------|---------|
+# MAGIC | `react_agent` | `SpanType.AGENT` | One per agent invocation — captures the user message and final response |
+# MAGIC | `llm_call_iter_N` | `SpanType.LLM` | One per think-step — captures the message list in and the tool_calls / content out |
+# MAGIC | `<tool_name>` | `SpanType.TOOL` | One per tool execution — captures args in, result out, and `tool_call_id` for cross-referencing |
+# MAGIC
+# MAGIC Result: the MLflow Trace UI renders a tree that mirrors the agent's reasoning so participants can
+# MAGIC interrogate exactly *what* the agent looked at, *when*, and *with what arguments*.
+
+# COMMAND ----------
+
+def _msg_to_dict(m):
+    """Compact, JSON-serializable form of a LangChain message for the LLM input panel."""
+    out = {"role": m.__class__.__name__, "content": getattr(m, "content", "")}
+    tc = getattr(m, "tool_calls", None)
+    if tc:
+        out["tool_calls"] = tc
+    if hasattr(m, "tool_call_id"):
+        out["tool_call_id"] = m.tool_call_id
+    return out
+
+
+def build_agent(system_prompt: str):
+    tools = uc_toolkit.tools + [vs_tool]
+    tools_by_name = {t.name: t for t in tools}
+    llm_with_tools = llm.bind_tools(tools)
+
+    def _invoke_llm(messages, iteration: int):
+        with mlflow.start_span(name=f"llm_call_iter_{iteration}", span_type=SpanType.LLM) as span:
+            span.set_inputs({"messages": [_msg_to_dict(m) for m in messages]})
+            ai_msg = llm_with_tools.invoke(messages)
+            span.set_outputs({
+                "content": ai_msg.content,
+                "tool_calls": [
+                    {"name": c["name"], "args": c["args"], "id": c["id"]}
+                    for c in (getattr(ai_msg, "tool_calls", None) or [])
+                ],
+            })
+            return ai_msg
+
+    def _invoke_tool(call):
+        tool = tools_by_name[call["name"]]
+        with mlflow.start_span(name=call["name"], span_type=SpanType.TOOL) as span:
+            span.set_inputs(call["args"])
+            span.set_attributes({"tool_call_id": call["id"]})
+            try:
+                result = tool.invoke(call["args"])
+                span.set_outputs({"result": str(result)[:2000]})
+                return result
+            except Exception as ex:
+                span.set_attributes({"error": str(ex)})
+                return f"Tool error: {ex}"
+
+    @mlflow.trace(span_type=SpanType.AGENT, name="react_agent")
+    def run(user_message: str, max_iters: int = 8) -> str:
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+        for i in range(max_iters):
+            ai_msg = _invoke_llm(messages, i)
+            messages.append(ai_msg)
+            if not getattr(ai_msg, "tool_calls", None):
+                return ai_msg.content
+            for call in ai_msg.tool_calls:
+                result = _invoke_tool(call)
+                messages.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
+        return messages[-1].content if messages else ""
+
+    return run
+
+agent = build_agent(SYSTEM_PROMPT)
 
 # COMMAND ----------
 
@@ -124,8 +196,9 @@ print(f"Evaluation dataset: {len(eval_data)} examples")
 # COMMAND ----------
 
 def predict_fn(inputs):
-    response = agent.invoke(inputs)
-    return response["messages"][-1].content
+    # `inputs` is shaped {"messages": [{"role": "user", "content": "..."}]}
+    user_message = inputs["messages"][-1]["content"]
+    return agent(user_message)
 
 # Quick test
 test_result = predict_fn(eval_data.iloc[0]["inputs"])
@@ -153,8 +226,9 @@ retention_guidelines = Guidelines(
 
 # COMMAND ----------
 
-# Run evaluation
-mlflow.langchain.autolog()
+# Run evaluation — our manual @mlflow.trace + start_span calls already produce the
+# AGENT → LLM/TOOL span tree, so we deliberately skip mlflow.langchain.autolog()
+# here to avoid duplicate spans from LangChain's auto-instrumentation.
 
 # Wrap inputs to match predict_fn parameter name
 eval_data_wrapped = eval_data.copy()
@@ -172,6 +246,17 @@ with mlflow.start_run(run_name="agent_eval_v1"):
     )
 
 print("✓ Evaluation complete")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Inspect the traces in MLflow
+# MAGIC
+# MAGIC Open the experiment in the MLflow UI (sidebar → Experiments → `ml-ai-workshop-genai`), pick the
+# MAGIC `agent_eval_v1` run, and click the **Traces** tab. Each eval example produces one trace with the
+# MAGIC `react_agent` AGENT span at the root and one TOOL/LLM child per step. This is how participants
+# MAGIC will debug their own agents in production — by interrogating exactly which tools were called,
+# MAGIC with which arguments, and what they returned.
 
 # COMMAND ----------
 
@@ -206,15 +291,11 @@ When a customer calls in, follow this workflow:
 6. Check retention policies to know what offers you can make
 7. Synthesize all information into a recommended retention action"""
 
-improved_agent = create_react_agent(
-    model=llm,
-    tools=uc_toolkit.tools + [vs_tool],
-    prompt=IMPROVED_PROMPT,
-)
+improved_agent = build_agent(IMPROVED_PROMPT)
 
 def improved_predict_fn(inputs):
-    response = improved_agent.invoke(inputs)
-    return response["messages"][-1].content
+    user_message = inputs["messages"][-1]["content"]
+    return improved_agent(user_message)
 
 # COMMAND ----------
 

@@ -17,9 +17,9 @@
 # MAGIC | 02 Feature Engineering | Feature Store with Unity Catalog |
 # MAGIC | 03 Train Model | LightGBM + Optuna hyperparameter tuning |
 # MAGIC | 03a Genie Code | Alternative: build a model conversationally |
-# MAGIC | 05 Model Serving | Online tables + real-time serving endpoint |
-# MAGIC | 06 Batch Inference | `fe.score_batch()` |
-# MAGIC | 07 Monitoring | Lakehouse Monitoring for drift detection |
+# MAGIC | 04 Model Serving | Real-time model serving endpoint |
+# MAGIC | 05 Batch Inference | Batch scoring with the Champion model |
+# MAGIC | 06 Monitoring | Lakehouse Monitoring for drift detection |
 # MAGIC
 # MAGIC ### Cross-Module Data Flow
 # MAGIC The churn model we build here becomes a **callable tool** in Module 2's GenAI retention agent.

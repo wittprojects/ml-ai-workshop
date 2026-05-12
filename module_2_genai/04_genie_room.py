@@ -377,18 +377,112 @@ print(f"  URL:      {space_url}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Test the Genie Room
+# MAGIC ### Drive the Genie Room from code — the Conversation API
 # MAGIC
-# MAGIC Open the URL above, or try asking questions right here via the API:
+# MAGIC The UI is one client; the API is another. To embed Genie in an app you need to know
+# MAGIC four things:
+# MAGIC
+# MAGIC | Step | SDK call |
+# MAGIC |------|----------|
+# MAGIC | Ask a question | `w.genie.start_conversation(space_id, content)` |
+# MAGIC | Poll status | `w.genie.get_message(space_id, conversation_id, message_id)` |
+# MAGIC | Get SQL result rows | `w.genie.get_message_attachment_query_result(...)` |
+# MAGIC | Follow up in the same thread | `w.genie.create_message(space_id, conversation_id, content)` |
+# MAGIC
+# MAGIC Messages move through a state machine. Typical happy-path:
+# MAGIC `SUBMITTED → FILTERING_CONTEXT → ASKING_AI → EXECUTING_QUERY → COMPLETED`.
+# MAGIC Terminal states are `COMPLETED`, `FAILED`, `CANCELLED`.
 
 # COMMAND ----------
 
-conversation = w.genie.start_conversation(
+# DBTITLE 1,Step 1 — start the conversation (returns immediately, async)
+# `start_conversation` returns a Wait object exposing the IDs needed to poll.
+convo = w.genie.start_conversation(
     space_id=genie_space.space_id,
     content="What is the churn rate by contract type?",
 )
-print(f"Started conversation: {conversation.conversation_id}")
-print("Open the Genie Room URL above to see the response and continue the conversation.")
+print(f"conversation_id: {convo.conversation_id}")
+print(f"message_id:      {convo.message_id}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Step 2 — poll get_message until terminal
+import time
+
+TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
+seen = []
+for _ in range(120):  # ~4 min max
+    msg = w.genie.get_message(
+        space_id=genie_space.space_id,
+        conversation_id=convo.conversation_id,
+        message_id=convo.message_id,
+    )
+    state = str(msg.status).split(".")[-1]
+    if not seen or seen[-1] != state:
+        seen.append(state)
+        print(f"  → {state}")
+    if state in TERMINAL:
+        break
+    time.sleep(2)
+print(f"\nState transitions: {' → '.join(seen)}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Step 3 — inspect the response: text + query attachments
+print(f"Status:      {msg.status}")
+print(f"Attachments: {len(msg.attachments or [])}")
+for i, att in enumerate(msg.attachments or []):
+    print(f"\n[attachment {i}] id={att.attachment_id}")
+    if att.text:
+        print(f"  text: {att.text.content[:300]}")
+    if att.query:
+        print(f"  description: {att.query.description}")
+        print(f"  sql:\n{att.query.query}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Step 4 — fetch the actual SQL result rows
+sql_attachment = next((a for a in (msg.attachments or []) if a.query), None)
+if sql_attachment:
+    result = w.genie.get_message_attachment_query_result(
+        space_id=genie_space.space_id,
+        conversation_id=convo.conversation_id,
+        message_id=msg.message_id,
+        attachment_id=sql_attachment.attachment_id,
+    )
+    sm = result.statement_response.manifest.schema
+    cols = [c.name for c in sm.columns]
+    rows = result.statement_response.result.data_array or []
+    print(f"Returned {len(rows)} rows × {len(cols)} cols")
+    display(spark.createDataFrame(rows, cols))
+else:
+    print("No query attachment on this message — Genie answered from context only.")
+
+# COMMAND ----------
+
+# DBTITLE 1,Step 5 — follow-up turn in the same conversation
+followup = w.genie.create_message(
+    space_id=genie_space.space_id,
+    conversation_id=convo.conversation_id,
+    content="Now break that down by internet service type.",
+)
+print(f"Follow-up message_id: {followup.message_id}")
+print("Re-use the polling pattern from Step 2 to wait on this message.")
+
+# Poll the follow-up to verify context carries over.
+for _ in range(120):
+    fmsg = w.genie.get_message(
+        space_id=genie_space.space_id,
+        conversation_id=convo.conversation_id,
+        message_id=followup.message_id,
+    )
+    if str(fmsg.status).split(".")[-1] in TERMINAL:
+        break
+    time.sleep(2)
+print(f"Follow-up final status: {fmsg.status}")
+for att in (fmsg.attachments or []):
+    if att.query:
+        print(f"\nFollow-up SQL:\n{att.query.query}")
 
 # COMMAND ----------
 
