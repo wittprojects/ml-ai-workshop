@@ -139,6 +139,32 @@ display(spark.sql(f"SELECT * FROM {catalog}.{schema}.get_retention_policy()"))
 # MAGIC
 # MAGIC Looks up the pre-computed churn probability for a customer from the batch-scored
 # MAGIC `churn_predictions` table built in Module 1, notebook 05.
+# MAGIC
+# MAGIC **Standalone fallback:** if Module 1 hasn't been run, we synthesize a stand-in
+# MAGIC `churn_predictions` table from `customers` so this module works on its own.
+
+# COMMAND ----------
+
+if not spark.catalog.tableExists(predictions_table_name):
+    print(f"⚠ {predictions_table_name} not found — Module 1 wasn't run.")
+    print(f"  Generating a synthetic stand-in so the agent's churn-risk tool still works.")
+    spark.sql(f"""
+        CREATE OR REPLACE TABLE {predictions_table_name} AS
+        SELECT
+          customer_id,
+          CAST(LEAST(0.99, GREATEST(0.01,
+            0.15
+            + CASE WHEN contract_type = 'Month-to-month' THEN 0.35 ELSE 0.0 END
+            + CASE WHEN tenure_months < 12 THEN 0.20 ELSE 0.0 END
+            + (rand(42) - 0.5) * 0.30
+          )) AS DOUBLE) AS churn_probability,
+          CURRENT_TIMESTAMP() AS scored_at
+        FROM {catalog}.{schema}.customers
+    """)
+    n = spark.table(predictions_table_name).count()
+    print(f"✓ Wrote synthetic {predictions_table_name} ({n} rows)")
+else:
+    print(f"✓ Using {predictions_table_name} from Module 1")
 
 # COMMAND ----------
 
