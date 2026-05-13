@@ -206,14 +206,11 @@ print(response.choices[0].message.content)
 # MAGIC contracts, complaint letters. Historically, getting these into a SQL-ready shape meant
 # MAGIC stitching together OCR services, layout detection APIs, and figure captioning models.
 # MAGIC
-# MAGIC The new **`ai_parse_document`** function (GA, schema v2.0) collapses that whole stack
-# MAGIC into one SQL call. It returns a `VARIANT` containing text, tables (preserved as
-# MAGIC structures, not flattened), figure descriptions, and bounding-box metadata.
+# MAGIC The new **`ai_parse_document`** function collapses that whole stack
+# MAGIC into one SQL call. It returns a `VARIANT` containing text, tables, figure descriptions, and bounding-box metadata.
 # MAGIC
 # MAGIC The big upgrade is the **handoff**: the parsed `VARIANT` is the native input to
 # MAGIC `ai_extract`, `ai_classify`, and `ai_query` — no glue code, no manual JSON wrangling.
-# MAGIC
-# MAGIC > **Requirements**: Serverless env v3+ or DBR 17.3+. Max 500 pages / 100 MB per file.
 
 # COMMAND ----------
 
@@ -426,8 +423,8 @@ display(extracted_df.selectExpr(
 # MAGIC `{value, citation_ids, confidence_score}`. The bboxes themselves live under
 # MAGIC `:metadata.citations[*]` and join back via `id`.
 # MAGIC
-# MAGIC > **Cost / latency**: Databricks reports ~1.5–3× higher cost when both flags are on
-# MAGIC > (a secondary evaluator pass produces these signals). Best for high-stakes pipelines
+# MAGIC >  Inference cost is higher when both flags are on
+# MAGIC > as a secondary evaluator pass produces these signals. Best for high-stakes pipelines
 # MAGIC > — financial services, healthcare, insurance — or for human-in-the-loop routing
 # MAGIC > where you auto-approve high-confidence fields and queue the rest for review.
 
