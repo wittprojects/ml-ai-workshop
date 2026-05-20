@@ -246,18 +246,7 @@ ORDER BY tickets DESC
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # 3. Permissions
-
-# COMMAND ----------
-
-for view_name in ["churn_customer_metrics", "churn_ticket_metrics", "tickets_with_customers"]:
-    spark.sql(f"GRANT SELECT ON VIEW {catalog}.{schema}.{view_name} TO `account users`")
-    print(f"  ✓ Granted SELECT on {view_name}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # 4. Create a Genie Room
+# MAGIC # 3. Create a Genie Room
 # MAGIC
 # MAGIC A **Genie Room** gives business users a natural-language chat interface to your data.
 # MAGIC When powered by metric views, every answer uses the same governed metric definitions —
@@ -362,17 +351,43 @@ print(json.dumps(space_config, indent=2)[:800] + "\n...")
 
 # COMMAND ----------
 
-genie_space = w.genie.create_space(
-    warehouse_id=warehouse_id,
-    title="Telecom Churn Analytics",
-    description="Ask questions about customer churn, revenue, tenure, and support ticket patterns. Powered by governed metric views.",
-    serialized_space=json.dumps(space_config),
-)
+# Idempotent: reuse an existing space with the same title if one exists, else create.
+# Re-running this cell after a previous workshop run applies the grant to the existing
+# space instead of creating a duplicate.
+target_title = "Telecom Churn Analytics"
+
+existing_space = None
+token = None
+while True:
+    resp = w.genie.list_spaces(page_token=token) if token else w.genie.list_spaces()
+    for s in (getattr(resp, "spaces", None) or []):
+        if getattr(s, "title", None) == target_title:
+            existing_space = s
+            break
+    if existing_space:
+        break
+    token = getattr(resp, "next_page_token", None)
+    if not token:
+        break
+
+if existing_space:
+    genie_space = existing_space
+    print(f"✓ Genie Room exists, reusing: {target_title}")
+else:
+    genie_space = w.genie.create_space(
+        warehouse_id=warehouse_id,
+        title=target_title,
+        description="Ask questions about customer churn, revenue, tenure, and support ticket patterns. Powered by governed metric views.",
+        serialized_space=json.dumps(space_config),
+    )
+    print(f"✓ Genie Room created: {genie_space.title}")
 
 space_url = f"{w.config.host}/genie/rooms/{genie_space.space_id}"
-print(f"✓ Genie Room created: {genie_space.title}")
 print(f"  Space ID: {genie_space.space_id}")
 print(f"  URL:      {space_url}")
+
+# Open the Genie room to All Account Users (CAN_RUN).
+grant_genie_space(genie_space.space_id)
 
 # COMMAND ----------
 

@@ -216,28 +216,6 @@ print(results[:500])
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Grant Execute Permissions on Functions
-
-# COMMAND ----------
-
-functions = [
-    "get_latest_ticket",
-    "get_customer_profile",
-    "get_ticket_history",
-    "get_retention_policy",
-    "get_churn_risk",
-]
-
-for func in functions:
-    try:
-        spark.sql(f"GRANT EXECUTE ON FUNCTION {catalog}.{schema}.{func} TO `account users`")
-        print(f"  ✓ EXECUTE granted on {func}")
-    except Exception as e:
-        print(f"  ⊘ Skipped {func} (not yet created)")
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ## Summary
 # MAGIC
 # MAGIC We created 6 tools for the retention agent:

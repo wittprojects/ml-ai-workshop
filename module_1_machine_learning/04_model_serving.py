@@ -92,6 +92,8 @@ except Exception as e:
     else:
         raise e
 
+grant_serving_endpoint(churn_model_serving_endpoint)
+
 # COMMAND ----------
 
 # MAGIC %md

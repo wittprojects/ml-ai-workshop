@@ -224,21 +224,26 @@ except Exception as e:
 
 # COMMAND ----------
 
-spark.sql(f"GRANT USE CATALOG ON CATALOG {catalog} TO `account users`")
-spark.sql(f"GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} TO `account users`")
+# Grant once at the schema level — UC privileges cascade to every child table,
+# view, function, registered model, and volume, including ones created later by
+# the module notebooks. Net effect: every UC asset the workshop creates is
+# automatically reachable by participants, no per-asset GRANT required.
+schema_grants = [
+    ("USE CATALOG",   f"CATALOG {catalog}"),
+    ("USE SCHEMA",    f"SCHEMA {catalog}.{schema}"),
+    ("SELECT",        f"SCHEMA {catalog}.{schema}"),
+    ("EXECUTE",       f"SCHEMA {catalog}.{schema}"),  # tables/views   # functions + registered models
+    ("READ VOLUME",   f"SCHEMA {catalog}.{schema}"),
+    ("WRITE VOLUME",  f"SCHEMA {catalog}.{schema}"),  # required for ai_parse_document imageOutputPath
+]
+for priv, obj in schema_grants:
+    spark.sql(f"GRANT {priv} ON {obj} TO `account users`")
+    print(f"  ✓ {priv} on {obj}")
 
-# Grant SELECT on all tables
-tables = ["customers", "service_tickets", "call_transcripts", "plans", "policies", "product_knowledge", "churn_labels"]
-for table in tables:
-    spark.sql(f"GRANT SELECT ON TABLE {catalog}.{schema}.{table} TO `account users`")
-    print(f"  ✓ SELECT granted on {table}")
-
-# Grant READ on the documents volume
-spark.sql(f"GRANT READ VOLUME ON VOLUME {documents_volume} TO `account users`")
-print(f"  ✓ READ VOLUME granted on {documents_volume}")
-
-# Grant EXECUTE on functions (will be created later in Module 2)
-# These grants will be applied when the functions are created
+# Non-UC objects (serving endpoints, vector search endpoints, Genie spaces)
+# don't inherit from the schema — they are granted inline by the notebook that
+# creates them. The VS endpoint is created here, so grant it now.
+grant_vector_search_endpoint(vector_search_endpoint)
 
 print(f"\n✓ All permissions granted to `account users`")
 
