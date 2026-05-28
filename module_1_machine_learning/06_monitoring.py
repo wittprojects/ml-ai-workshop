@@ -16,14 +16,14 @@
 # MAGIC |---------|-------------|
 # MAGIC | **Baseline comparison** | Compare production predictions against training-distribution baseline |
 # MAGIC | **Drift detection** | KS, chi-squared, PSI, Wasserstein, Jensen-Shannon, total variation |
-# MAGIC | **Model quality** | Classification metrics when ground-truth labels arrive |
+# MAGIC | **Model quality** | Classification metrics (accuracy / precision / recall / F1) when labels are present |
 # MAGIC | **Custom metrics** | Business KPIs via Jinja SQL templates |
 # MAGIC | **Alerting** | SQL-based threshold alerts on drift metrics |
 # MAGIC | **Dashboard** | Auto-generated Lakeview dashboard |
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-sdk==0.102.0 mlflow==3.8.1 scikit-learn==1.6.1 lightgbm==4.6.0 -q
+# MAGIC %pip install databricks-sdk==0.102.0 mlflow==3.8.1 scikit-learn==1.6.1 lightgbm==4.6.0 "numpy<2" -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -32,56 +32,44 @@
 
 # COMMAND ----------
 
+import time
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import (
     MonitorInferenceLog,
     MonitorInferenceLogProblemType,
+    MonitorInfoStatus,
     MonitorMetric,
     MonitorMetricType,
 )
 from pyspark.sql import functions as F
 import mlflow
 from mlflow.tracking import MlflowClient
-import time
 
 w = WorkspaceClient()
 mlflow.set_registry_uri("databricks-uc")
 mlflow_client = MlflowClient()
 
 predictions_table = predictions_table_name
-spark.sql(f"ALTER TABLE {predictions_table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
-
-# Ensure prediction column is DOUBLE — monitor requires prediction & label types to match.
-pred_type = next(
-    f.dataType.simpleString()
-    for f in spark.table(predictions_table).schema.fields
-    if f.name == "prediction"
-)
-if pred_type != "double":
-    print(f"Casting prediction from {pred_type} → double")
-    casted = spark.table(predictions_table).withColumn("prediction", F.col("prediction").cast("double"))
-    casted.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(predictions_table)
-    spark.sql(f"ALTER TABLE {predictions_table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
-
 baseline_table = f"{catalog}.{schema}.churn_predictions_baseline"
 
-# Model ID for monitoring must match the serving endpoint's model identifier
-# Format: <model_name> version <version> (matches inference table convention)
+# The monitor's model_id_col value must match the format the serving endpoint emits
+# in its auto-captured inference table: "<fully-qualified model name> version <N>".
 champion_version = mlflow_client.get_model_version_by_alias(model_name, "Champion").version
 monitor_model_id = f"{model_name} version {champion_version}"
+print(f"Monitoring model: {monitor_model_id}")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 1. Create Baseline Table
 # MAGIC
-# MAGIC A monitor needs a **baseline** — the distribution the model was trained on. If we compare a table against itself, drift is always zero.
+# MAGIC A monitor needs a **baseline** — the distribution the model was trained on. If we compared the predictions table against itself, drift would always be zero.
 # MAGIC
-# MAGIC We score the **training split** with the Champion model to capture the training-time distribution. This becomes our reference point.
+# MAGIC We score the **training split** with the Champion model. The resulting predictions + features + ground-truth labels become the reference distribution.
 
 # COMMAND ----------
 
-# Score training split to create baseline — join labels to features, then predict.
+# Score training split — join labels to features, add the on-demand feature, predict.
 train_labels = spark.table("churn_labels").filter("split = 'train'").select("customer_id")
 features = spark.table(feature_table_name).drop("update_timestamp")
 train_df = (
@@ -97,11 +85,11 @@ model = mlflow.sklearn.load_model(f"models:/{model_name}@Champion")
 feature_cols = [c for c in train_df.columns if c != "customer_id"]
 
 train_pdf = train_df.toPandas()
-# Cast prediction to float — monitor requires prediction and label types to match (both DOUBLE).
+# Cast prediction to float — monitoring requires prediction and label types to match (both DOUBLE).
 train_pdf["prediction"] = model.predict(train_pdf[feature_cols]).astype("float64")
 train_pdf["churn_probability"] = model.predict_proba(train_pdf[feature_cols])[:, 1]
-# True label for the training rows — Yes=1.0, No=0.0 (matches model encoding).
-# The monitor's label_col must exist in BOTH the predictions and baseline tables.
+
+# Ground truth for the training rows: Yes → 1.0, No → 0.0 (matches LabelEncoder used in nb 03).
 churn_yes_no = (
     spark.table("churn_labels")
     .filter("split = 'train'")
@@ -114,7 +102,8 @@ baseline_df = spark.createDataFrame(
     train_pdf[["customer_id"] + feature_cols + ["prediction", "churn_probability", "churn_label"]]
 )
 
-# Add monitoring columns — fixed timestamp for the baseline window
+# Monitoring columns: fixed timestamp anchors the baseline window. model_id matches the
+# serving endpoint convention.
 baseline_df = (
     baseline_df
     .withColumn("inference_timestamp", F.lit("2025-06-01").cast("timestamp"))
@@ -126,7 +115,7 @@ print(f"Baseline table created: {baseline_table} ({spark.table(baseline_table).c
 
 # COMMAND ----------
 
-# Baseline distribution summary
+# Baseline distribution sanity check — counts and feature averages per predicted class.
 display(
     spark.table(baseline_table)
     .groupBy("prediction")
@@ -140,95 +129,136 @@ display(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Prepare Inference Table
+# MAGIC ## 2. Build the Windowed Predictions Table
 # MAGIC
-# MAGIC The predictions saved in notebook 05 (test split) represent our "current" production scoring window.
+# MAGIC The monitor reads from a **single source table** that already contains every (model_id, window) row it needs. We score the test split twice:
+# MAGIC
+# MAGIC | Window | Features | Cause we're simulating |
+# MAGIC |--------|----------|------------------------|
+# MAGIC | `2025-07-01` | original | normal production scoring |
+# MAGIC | `2025-08-01` | `monthly_charges` +15%, `total_charges` +20%, `tenure_months` +6, 70% forced to month-to-month contracts | pricing increase + ageing customer base + market shift |
+# MAGIC
+# MAGIC Both windows get scored by the **same Champion model** and labelled with the same `model_id`, so the monitor can group them and compute drift against the baseline.
+# MAGIC
+# MAGIC > We **rebuild the table in one `overwrite` write** (no ALTER COLUMN, no UPDATE, no MERGE). Inference Log monitors are sensitive to mid-stream schema churn — a single clean write produces a predictable Delta history that the monitor reliably profiles.
 
 # COMMAND ----------
 
-# Add monitoring columns to predictions table if not present
-existing_cols = [c.lower() for c in spark.table(predictions_table).columns]
-
-if "inference_timestamp" not in existing_cols:
-    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (inference_timestamp TIMESTAMP)")
-
-if "model_id" not in existing_cols:
-    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (model_id STRING)")
-
-spark.sql(f"""
-    UPDATE {predictions_table}
-    SET inference_timestamp = CAST('2025-07-01' AS TIMESTAMP),
-        model_id = '{monitor_model_id}'
-    WHERE inference_timestamp IS NULL
-""")
-
-print(f"Inference table ready: {spark.table(predictions_table).count()} rows")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 3. Simulate Drift
-# MAGIC
-# MAGIC In production, drift happens naturally — pricing changes, customer behavior shifts, seasonal patterns.
-# MAGIC Here we **programmatically shift features** to demonstrate detection:
-# MAGIC
-# MAGIC | Feature | Shift | Simulated cause |
-# MAGIC |---------|-------|-----------------|
-# MAGIC | `monthly_charges` | +15% | Pricing increase |
-# MAGIC | `total_charges` | +20% | Cumulative effect |
-# MAGIC | `tenure_months` | +6 | Customer base aging |
-# MAGIC | `contract_type` | 70% month-to-month | Market shift |
-
-# COMMAND ----------
-
-# Build drifted dataset from current predictions
-current_df = spark.table(predictions_table).filter("inference_timestamp = '2025-07-01'")
-
-drifted_df = (
-    current_df
-    .withColumn("monthly_charges", F.round(F.col("monthly_charges") * 1.15, 2))
-    .withColumn("total_charges", F.round(F.col("total_charges") * 1.20, 2))
-    .withColumn("tenure_months", F.col("tenure_months") + 6)
-    .withColumn(
-        "contract_type",
-        F.when(F.rand() < 0.70, F.lit("Month-to-month")).otherwise(F.col("contract_type"))
+# Read test customers + features once — same join as notebook 05.
+test_labels = (
+    spark.table("churn_labels")
+    .filter("split = 'test'")
+    .select(
+        "customer_id",
+        F.when(F.col("churn") == "Yes", 1.0).otherwise(0.0).alias("churn_label"),
     )
-    .withColumn("inference_timestamp", F.lit("2025-08-01").cast("timestamp"))
+)
+inference_features = (
+    test_labels
+    .join(features, on="customer_id", how="inner")
+    .withColumn(
+        "avg_price_increase",
+        F.expr(f"{catalog}.{schema}.avg_price_increase(monthly_charges, tenure_months)")
+    )
 )
 
-# Idempotent: remove any existing drifted rows before appending
-spark.sql(f"DELETE FROM {predictions_table} WHERE inference_timestamp = CAST('2025-08-01' AS TIMESTAMP)")
-drifted_df.write.mode("append").saveAsTable(predictions_table)
+base_pdf = inference_features.toPandas()
+# Stable column ordering for both windows.
+feature_only_cols = [c for c in inference_features.columns if c not in ("customer_id", "churn_label")]
 
-print(f"Drifted rows appended: {drifted_df.count()}")
-print(f"Total rows in predictions table: {spark.table(predictions_table).count()}")
 
-# Verify we have multiple time windows
-display(spark.sql(f"SELECT inference_timestamp, COUNT(*) as row_count FROM {predictions_table} GROUP BY 1 ORDER BY 1"))
+def _score_window(pdf, inference_timestamp):
+    """Score pdf with the Champion model and stamp it with the given window timestamp."""
+    pdf = pdf.copy()
+    pdf["prediction"] = model.predict(pdf[feature_only_cols]).astype("float64")
+    pdf["churn_probability"] = model.predict_proba(pdf[feature_only_cols])[:, 1]
+    pdf["inference_timestamp"] = inference_timestamp
+    pdf["model_id"] = monitor_model_id
+    return pdf
+
+
+# Window 1: 2025-07-01 — original features, original scores.
+window1 = _score_window(base_pdf, "2025-07-01")
+
+# Window 2: 2025-08-01 — drifted features, then re-score so predictions naturally shift.
+import numpy as np
+np.random.seed(42)
+drifted_pdf = base_pdf.copy()
+drifted_pdf["monthly_charges"] = (drifted_pdf["monthly_charges"] * 1.15).round(2)
+drifted_pdf["total_charges"] = (drifted_pdf["total_charges"] * 1.20).round(2)
+drifted_pdf["tenure_months"] = drifted_pdf["tenure_months"] + 6
+mask = np.random.rand(len(drifted_pdf)) < 0.70
+drifted_pdf.loc[mask, "contract_type"] = "Month-to-month"
+# Recompute avg_price_increase since monthly_charges + tenure_months changed.
+drifted_pdf["avg_price_increase"] = drifted_pdf["monthly_charges"] / drifted_pdf["tenure_months"].clip(lower=1)
+window2 = _score_window(drifted_pdf, "2025-08-01")
+
+# Stable column order across both windows; pandas concat preserves dtypes.
+import pandas as pd
+col_order = (
+    ["customer_id"]
+    + feature_only_cols
+    + ["prediction", "churn_probability", "inference_timestamp", "model_id", "churn_label"]
+)
+windowed_pdf = pd.concat([window1[col_order], window2[col_order]], ignore_index=True)
+
+windowed_df = (
+    spark.createDataFrame(windowed_pdf)
+    .withColumn("inference_timestamp", F.col("inference_timestamp").cast("timestamp"))
+)
+
+# Single clean overwrite — replaces whatever notebook 05 wrote with the monitor-ready version.
+(
+    windowed_df.write
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(predictions_table)
+)
+print(f"✓ Predictions table rebuilt with {spark.table(predictions_table).count()} rows across 2 windows")
+
+# COMMAND ----------
+
+# Window manifest — confirms both windows landed with the expected row count and label coverage.
+display(spark.sql(f"""
+    SELECT inference_timestamp,
+           COUNT(*) AS rows,
+           ROUND(100.0 * AVG(prediction), 1) AS pct_predicted_churn,
+           SUM(CASE WHEN churn_label IS NOT NULL THEN 1 ELSE 0 END) AS labeled_rows
+    FROM {predictions_table}
+    GROUP BY inference_timestamp
+    ORDER BY inference_timestamp
+"""))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Create Lakehouse Monitor
+# MAGIC ## 3. Create the Lakehouse Monitor
 # MAGIC
-# MAGIC We create an **InferenceLog** monitor that:
-# MAGIC - Compares each time window against the baseline
-# MAGIC - Computes per-column statistics and drift tests
-# MAGIC - Tracks a custom business metric
+# MAGIC One API call — Databricks provisions the monitor, runs an initial refresh on a serverless job, writes per-column statistics to `*_profile_metrics`, drift tests to `*_drift_metrics`, and builds a Lakeview dashboard.
+# MAGIC
+# MAGIC We configure it as an **InferenceLog** monitor with:
+# MAGIC - `prediction_col="prediction"` and `label_col="churn_label"` → drift **and** model quality
+# MAGIC - `model_id_col="model_id"` → metrics are sliced per model version
+# MAGIC - `timestamp_col="inference_timestamp"` and `granularities=["1 month"]` → one row per (column, window)
+# MAGIC - A custom metric: `high_risk_percentage` — the % of churn=1 predictions per window
 
 # COMMAND ----------
 
-# Delete existing monitor for idempotency
+# Idempotency: delete any existing monitor before recreating. Without this the create
+# call would fail on re-run with "monitor already exists".
 try:
+    w.quality_monitors.get(table_name=predictions_table)
     w.quality_monitors.delete(table_name=predictions_table)
     print(f"Deleted existing monitor on {predictions_table}")
-    time.sleep(5)
+    # Give the backend a moment to release the metric tables it owns.
+    time.sleep(10)
 except Exception:
-    print("No existing monitor to delete")
+    print("No existing monitor — creating fresh")
 
 # COMMAND ----------
 
-# Define custom metric: percentage of high-risk (churn=1) predictions
+# Custom metric: % of high-risk (predicted churn=1) per time window. The {{prediction_col}}
+# placeholder is replaced by the monitor with the configured prediction column name.
 high_risk_metric = MonitorMetric(
     type=MonitorMetricType.CUSTOM_METRIC_TYPE_AGGREGATE,
     name="high_risk_percentage",
@@ -237,210 +267,13 @@ high_risk_metric = MonitorMetric(
     output_data_type="DOUBLE",
 )
 
-# COMMAND ----------
-
-# Create the monitor
 username = spark.sql("SELECT current_user()").first()[0]
 
+# Capture wall-clock just before create so we can identify "our" refresh in list_refreshes
+# even if the SDK returns a stale or yet-to-be-persisted refresh_id.
+t_create_ms = int(time.time() * 1000)
+
 monitor_info = w.quality_monitors.create(
-    table_name=predictions_table,
-    inference_log=MonitorInferenceLog(
-        problem_type=MonitorInferenceLogProblemType.PROBLEM_TYPE_CLASSIFICATION,
-        prediction_col="prediction",
-        label_col=None,
-        model_id_col="model_id",
-        timestamp_col="inference_timestamp",
-        granularities=["1 month"],
-    ),
-    baseline_table_name=baseline_table,
-    custom_metrics=[high_risk_metric],
-    output_schema_name=f"{catalog}.{schema}",
-    assets_dir=f"/Workspace/Users/{username}/databricks_lakehouse_monitoring/{predictions_table}",
-)
-
-print(f"Monitor created for {predictions_table}")
-print(f"Dashboard: {monitor_info.assets_dir}")
-
-import time
-from databricks.sdk.service.catalog import MonitorInfoStatus, MonitorRefreshInfoState
-
-
-# Wait for monitor to be created
-while monitor_info.status == MonitorInfoStatus.MONITOR_STATUS_PENDING:
-  monitor_info = w.quality_monitors.get(table_name=predictions_table)
-  time.sleep(10)
-
-assert monitor_info.status == MonitorInfoStatus.MONITOR_STATUS_ACTIVE, "Error creating monitor"
-
-# COMMAND ----------
-
-# Trigger refresh and wait for completion
-w.quality_monitors.run_refresh(table_name=predictions_table)
-print("Monitor refresh triggered — this takes ~10 minutes...")
-
-_TERMINAL_OK = {"SUCCESS", "SUCCEEDED"}
-_TERMINAL_BAD = {"FAILED", "CANCELLED", "CANCELED"}
-
-while True:
-    refreshes_response = w.quality_monitors.list_refreshes(table_name=predictions_table)
-    active = [r for r in refreshes_response.refreshes if str(r.state) in ("PENDING", "RUNNING")]
-    if not active:
-        latest = sorted(refreshes_response.refreshes, key=lambda r: r.start_time_ms or 0, reverse=True)[0]
-        state_str = str(latest.state)
-        print(f"Refresh complete — state: {state_str}")
-        if state_str in _TERMINAL_OK:
-            print("Monitor refresh succeeded.")
-            break
-        if state_str in _TERMINAL_BAD:
-            print(f"Monitor refresh ended with state: {state_str}")
-            break
-        # Unknown terminal state — bail rather than spin
-        print(f"Unknown terminal state '{state_str}' — exiting wait loop")
-        break
-    print(f"  Still running... ({time.strftime('%H:%M:%S')})")
-    time.sleep(30)
-
-# COMMAND ----------
-
-w.quality_monitors.get(table_name=predictions_table)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 5. Analyze Profile Metrics
-# MAGIC
-# MAGIC The monitor creates a `_profile_metrics` table with **per-column statistics for each time window** — count, avg, stddev, min, max, quantiles, percent zeros, and more.
-
-# COMMAND ----------
-
-# Check what windows were computed
-display(spark.sql(f"""
-    SELECT DISTINCT window, granularity, model_id
-    FROM {catalog}.{schema}.churn_predictions_profile_metrics
-    ORDER BY window
-"""))
-
-# COMMAND ----------
-
-display(spark.sql(f"""
-    SELECT window, column_name,
-           count, avg, stddev, min, max,
-           percent_zeros
-    FROM {catalog}.{schema}.churn_predictions_profile_metrics
-    WHERE column_name IN ('monthly_charges', 'tenure_months', 'contract_type', 'prediction')
-      AND slice_key IS NULL
-      AND window IS NOT NULL
-    ORDER BY column_name, window
-"""))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 6. Analyze Drift Metrics
-# MAGIC
-# MAGIC The `_drift_metrics` table compares each window against the baseline using multiple statistical tests:
-# MAGIC
-# MAGIC | Test | Type | What it measures |
-# MAGIC |------|------|-----------------|
-# MAGIC | **KS test** | Numerical | Max CDF distance — are distributions shaped differently? |
-# MAGIC | **Chi-squared** | Categorical | Frequency differences — has the category mix changed? |
-# MAGIC | **PSI** | Both | Population Stability Index — overall distribution shift |
-# MAGIC | **Wasserstein** | Numerical | Earth mover's distance — how much "work" to transform one distribution into another |
-# MAGIC | **Jensen-Shannon** | Both | Symmetric KL divergence — information-theoretic distance |
-# MAGIC | **Total variation** | Both | Max absolute probability difference across bins |
-
-# COMMAND ----------
-
-# Numerical feature drift
-display(spark.sql(f"""
-    SELECT window, column_name,
-           wasserstein_distance,
-           ks_test.statistic AS ks_statistic,
-           ks_test.pvalue AS ks_pvalue,
-           population_stability_index AS psi
-    FROM {catalog}.{schema}.churn_predictions_drift_metrics
-    WHERE column_name IN ('monthly_charges', 'total_charges', 'tenure_months')
-      AND slice_key IS NULL
-    ORDER BY column_name, window
-"""))
-
-# COMMAND ----------
-
-# Categorical feature drift
-display(spark.sql(f"""
-    SELECT window, column_name,
-           chi_squared_test.statistic AS chi2_statistic,
-           chi_squared_test.pvalue AS chi2_pvalue,
-           js_distance,
-           tv_distance
-    FROM {catalog}.{schema}.churn_predictions_drift_metrics
-    WHERE column_name IN ('contract_type', 'internet_service', 'payment_method', 'prediction')
-      AND slice_key IS NULL
-    ORDER BY column_name, window
-"""))
-
-# COMMAND ----------
-
-# Drift summary: which features drifted most?
-display(spark.sql(f"""
-    SELECT column_name, window,
-           COALESCE(population_stability_index, 0) AS psi,
-           COALESCE(wasserstein_distance, 0) AS wasserstein,
-           COALESCE(js_distance, 0) AS js_distance,
-           COALESCE(ks_test.pvalue, chi_squared_test.pvalue) AS test_pvalue,
-           CASE
-               WHEN COALESCE(population_stability_index, 0) > 0.2 THEN 'MAJOR DRIFT'
-               WHEN COALESCE(population_stability_index, 0) > 0.1 THEN 'MODERATE DRIFT'
-               WHEN COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05 THEN 'SIGNIFICANT'
-               ELSE 'STABLE'
-           END AS drift_status
-    FROM {catalog}.{schema}.churn_predictions_drift_metrics
-    WHERE slice_key IS NULL
-      AND window IS NOT NULL
-    ORDER BY COALESCE(population_stability_index, 0) DESC
-"""))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 7. Model Quality with Ground Truth
-# MAGIC
-# MAGIC In production, **labels arrive after predictions** — a customer churns days or weeks after being scored. Lakehouse Monitoring computes classification metrics (accuracy, precision, recall, F1) automatically when a label column is present.
-# MAGIC
-# MAGIC We'll MERGE ground-truth labels into the predictions table and re-run the monitor.
-
-# COMMAND ----------
-
-# Add label column as DOUBLE (must match prediction column type for monitoring)
-existing_cols = [c.lower() for c in spark.table(predictions_table).columns]
-if "churn_label" not in existing_cols:
-    spark.sql(f"ALTER TABLE {predictions_table} ADD COLUMNS (churn_label DOUBLE)")
-
-# MERGE ground-truth labels into predictions
-# Model uses LabelEncoder: Yes=1, No=0 — match that encoding
-spark.sql(f"""
-    MERGE INTO {predictions_table} AS p
-    USING (
-        SELECT customer_id, CAST(CASE WHEN churn = 'Yes' THEN 1 ELSE 0 END AS DOUBLE) AS churn_label
-        FROM {catalog}.{schema}.churn_labels
-    ) AS l
-    ON p.customer_id = l.customer_id
-    WHEN MATCHED THEN UPDATE SET p.churn_label = l.churn_label
-""")
-
-label_coverage = spark.sql(f"""
-    SELECT
-        COUNT(*) AS total_rows,
-        SUM(CASE WHEN churn_label IS NOT NULL THEN 1 ELSE 0 END) AS labeled_rows,
-        ROUND(100.0 * SUM(CASE WHEN churn_label IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_labeled
-    FROM {predictions_table}
-""")
-display(label_coverage)
-
-# COMMAND ----------
-
-# Update monitor to include label column, then refresh
-w.quality_monitors.update(
     table_name=predictions_table,
     inference_log=MonitorInferenceLog(
         problem_type=MonitorInferenceLogProblemType.PROBLEM_TYPE_CLASSIFICATION,
@@ -453,110 +286,330 @@ w.quality_monitors.update(
     baseline_table_name=baseline_table,
     custom_metrics=[high_risk_metric],
     output_schema_name=f"{catalog}.{schema}",
+    assets_dir=f"/Workspace/Users/{username}/databricks_lakehouse_monitoring/{predictions_table}",
 )
-
-w.quality_monitors.run_refresh(table_name=predictions_table)
-print("Refresh triggered with label column — model quality metrics will be computed")
-print("This takes 1-3 minutes. You can continue reading while it runs.")
+print(f"Monitor create() returned status={monitor_info.status.value}")
 
 # COMMAND ----------
 
-# Model quality metrics (run after refresh completes)
-display(spark.sql(f"""
-    SELECT window,
-           accuracy_score, precision, recall, f1_score, log_loss
-    FROM {catalog}.{schema}.churn_predictions_profile_metrics
+# MAGIC %md
+# MAGIC ## 4. Wait for the Monitor to Go Active + Print Dashboard URL
+# MAGIC
+# MAGIC `create()` provisions the monitor and triggers an initial refresh asynchronously. The refresh runs on a serverless job that profiles the baseline + source, computes drift, evaluates classification metrics (because `label_col` is set) and the custom metric.
+# MAGIC
+# MAGIC We block only on the monitor going `ACTIVE` (~30s). The first refresh's INPUT / drift / quality rows are written **in the background** over the next 5–15 minutes — the cells below query them. If a cell returns 0 rows on first run, the refresh just hasn't materialised that section yet; re-execute the cell once the dashboard shows data.
+
+# COMMAND ----------
+
+profile_metrics_table = f"{catalog}.{schema}.churn_predictions_profile_metrics"
+drift_metrics_table = f"{catalog}.{schema}.churn_predictions_drift_metrics"
+
+
+def wait_for_monitor_active(table_name, timeout_s=300, poll_s=10):
+    deadline = time.time() + timeout_s
+    while True:
+        info = w.quality_monitors.get(table_name=table_name)
+        if info.status == MonitorInfoStatus.MONITOR_STATUS_ACTIVE:
+            print(f"  ✓ monitor ACTIVE")
+            return info
+        if info.status in (
+            MonitorInfoStatus.MONITOR_STATUS_ERROR,
+            MonitorInfoStatus.MONITOR_STATUS_FAILED,
+        ):
+            raise RuntimeError(f"Monitor reached terminal state {info.status.value}")
+        if time.time() > deadline:
+            raise TimeoutError(f"Monitor still {info.status.value} after {timeout_s}s")
+        print(f"  monitor status={info.status.value} — waiting...")
+        time.sleep(poll_s)
+
+
+wait_for_monitor_active(predictions_table)
+
+info = w.quality_monitors.get(table_name=predictions_table)
+print(f"Assets folder: {info.assets_dir}")
+print(f"Dashboard ID:  {info.dashboard_id}")
+print(f"Dashboard URL: {w.config.host.rstrip('/')}/dashboardsv3/{info.dashboard_id}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 5. Wait for the Metric Tables to Be Created
+# MAGIC
+# MAGIC The monitor's first refresh creates `*_profile_metrics` and `*_drift_metrics` itself — they don't exist until the refresh runs. We block for up to 15 minutes for the tables to **come into existence** (which is the minimum gate for the display cells below to read them). We don't require windowed INPUT / drift rows — those land at the same time on a healthy backend, but if the refresh is slow, the display cells simply return 0 rows and you can re-run them later.
+
+# COMMAND ----------
+
+def _table_counts():
+    """Return (n_baseline_cols, n_input_windows, n_drift_windows). Each is 0 if the
+    table or row class isn't present yet. Returns None if either table doesn't
+    exist at all — the caller treats that as "keep polling."
+    """
+    try:
+        n_baseline = spark.table(profile_metrics_table).filter("log_type = 'BASELINE'").select("column_name").distinct().count()
+    except Exception:
+        return None
+    try:
+        n_input = spark.table(profile_metrics_table).filter("log_type = 'INPUT' AND slice_key IS NULL AND window IS NOT NULL").select("window").distinct().count()
+    except Exception:
+        n_input = 0
+    try:
+        n_drift = spark.table(drift_metrics_table).filter("slice_key IS NULL AND window IS NOT NULL").select("window").distinct().count()
+    except Exception:
+        n_drift = 0
+    return n_baseline, n_input, n_drift
+
+
+def poll_for_metric_tables(timeout_s=1500, poll_s=30):
+    """Block until BASELINE rows are present in profile_metrics — that's the stable
+    signal that the refresh has finished creating both tables and writing at least
+    the baseline profile. INPUT / drift rows may take additional time (or may never
+    arrive on a known-broken backend) — we report status but don't block on them.
+    Raises only on timeout.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() <= deadline:
+        counts = _table_counts()
+        if counts is not None:
+            n_baseline, n_input, n_drift = counts
+            if n_baseline >= 1:
+                if n_input >= 2 and n_drift >= 2:
+                    print(f"  ✓ refresh complete — baseline cols={n_baseline}, input windows={n_input}, drift windows={n_drift}")
+                else:
+                    print(f"  baseline cols={n_baseline} input_windows={n_input} drift_windows={n_drift}")
+                    print(
+                        f"  ⚠ INPUT / drift rows not yet populated. The display cells below will "
+                        f"return 0 rows until the refresh writes them — re-run those cells (or the "
+                        f"whole notebook) in ~5 min, or watch the dashboard URL above for live updates."
+                    )
+                return
+            print(f"  metric tables exist but no BASELINE rows yet — waiting...")
+        else:
+            print(f"  metric tables not yet created — waiting...")
+        time.sleep(poll_s)
+    print(
+        f"  ⚠ metric tables did not gain BASELINE rows after {timeout_s}s. The monitor refresh is "
+        f"stuck — check the dashboard URL printed above and refresh state via "
+        f"`databricks quality-monitors list-refreshes {predictions_table}`. The display cells below "
+        f"will print a soft 'not yet readable' warning instead of crashing."
+    )
+
+
+poll_for_metric_tables()
+
+
+def safe_display(label, sql):
+    """Display the result of a query, but degrade gracefully if the metric table
+    isn't yet readable. On a healthy refresh this is a no-op; on a slow / stuck
+    refresh it prevents the notebook from crashing so participants can still see
+    the dashboard URL and re-run individual cells later.
+    """
+    try:
+        display(spark.sql(sql))
+    except Exception as e:
+        print(f"  ⚠ {label}: metric table not yet readable ({type(e).__name__}). Re-run this cell once the refresh completes.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6. Profile Metrics
+# MAGIC
+# MAGIC The `_profile_metrics` table holds **per-column statistics for each time window** — count, avg, stddev, min, max, percent zeros, percent nulls, quantiles, and classification metrics when a label column is present.
+
+# COMMAND ----------
+
+# Window manifest — confirms we have both 2025-07 and 2025-08 INPUT rows.
+safe_display("window manifest", f"""
+    SELECT log_type, window, granularity, model_id
+    FROM {profile_metrics_table}
+    WHERE column_name = ':table' OR log_type = 'BASELINE'
+    GROUP BY log_type, window, granularity, model_id
+    ORDER BY log_type, window
+""")
+
+# COMMAND ----------
+
+# Numerical + categorical features side by side across windows.
+safe_display("feature profile", f"""
+    SELECT log_type, window, column_name,
+           count, avg, stddev, min, max, percent_zeros
+    FROM {profile_metrics_table}
+    WHERE column_name IN ('monthly_charges', 'tenure_months', 'contract_type', 'prediction')
+      AND slice_key IS NULL
+      AND log_type = 'INPUT'
+    ORDER BY column_name, window
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 7. Drift Metrics
+# MAGIC
+# MAGIC The `_drift_metrics` table compares each window against the baseline using six statistical tests:
+# MAGIC
+# MAGIC | Test | Type | What it measures |
+# MAGIC |------|------|-----------------|
+# MAGIC | **KS test** | Numerical | Max CDF distance — are distributions shaped differently? |
+# MAGIC | **Chi-squared** | Categorical | Frequency differences — has the category mix changed? |
+# MAGIC | **PSI** | Both | Population Stability Index — overall distribution shift |
+# MAGIC | **Wasserstein** | Numerical | Earth mover's distance |
+# MAGIC | **Jensen-Shannon** | Both | Symmetric KL divergence |
+# MAGIC | **Total variation** | Both | Max absolute probability difference across bins |
+
+# COMMAND ----------
+
+# Numerical features — these are the ones we drifted.
+safe_display("numerical drift", f"""
+    SELECT window, column_name,
+           ROUND(wasserstein_distance, 4) AS wasserstein,
+           ROUND(ks_test.statistic, 4) AS ks_statistic,
+           ROUND(ks_test.pvalue, 6) AS ks_pvalue,
+           ROUND(population_stability_index, 4) AS psi
+    FROM {drift_metrics_table}
+    WHERE column_name IN ('monthly_charges', 'total_charges', 'tenure_months')
+      AND slice_key IS NULL
+      AND window IS NOT NULL
+    ORDER BY column_name, window
+""")
+
+# COMMAND ----------
+
+# Categorical features (chi² + JS + TV) including the prediction column itself.
+safe_display("categorical drift", f"""
+    SELECT window, column_name,
+           ROUND(chi_squared_test.statistic, 4) AS chi2_statistic,
+           ROUND(chi_squared_test.pvalue, 6) AS chi2_pvalue,
+           ROUND(js_distance, 4) AS js_distance,
+           ROUND(tv_distance, 4) AS tv_distance
+    FROM {drift_metrics_table}
+    WHERE column_name IN ('contract_type', 'internet_service', 'payment_method', 'prediction')
+      AND slice_key IS NULL
+      AND window IS NOT NULL
+    ORDER BY column_name, window
+""")
+
+# COMMAND ----------
+
+# Drift status rollup — ranks features by how much they moved.
+safe_display("drift status rollup", f"""
+    SELECT column_name, window,
+           ROUND(COALESCE(population_stability_index, 0), 4) AS psi,
+           ROUND(COALESCE(wasserstein_distance, 0), 4) AS wasserstein,
+           ROUND(COALESCE(js_distance, 0), 4) AS js_distance,
+           ROUND(COALESCE(ks_test.pvalue, chi_squared_test.pvalue), 6) AS test_pvalue,
+           CASE
+               WHEN COALESCE(population_stability_index, 0) > 0.2 THEN 'MAJOR DRIFT'
+               WHEN COALESCE(population_stability_index, 0) > 0.1 THEN 'MODERATE DRIFT'
+               WHEN COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05 THEN 'SIGNIFICANT'
+               ELSE 'STABLE'
+           END AS drift_status
+    FROM {drift_metrics_table}
+    WHERE slice_key IS NULL
+      AND window IS NOT NULL
+    ORDER BY COALESCE(population_stability_index, 0) DESC
+""")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 8. Model Quality
+# MAGIC
+# MAGIC Because we configured `label_col="churn_label"`, the monitor automatically computes classification metrics per window from the labels we wrote into the predictions table.
+
+# COMMAND ----------
+
+# precision/recall/f1_score can be either DOUBLE or STRUCT<macro,micro,weighted>
+# depending on the monitoring version — detect at runtime and unwrap accordingly.
+def _quality_select():
+    try:
+        schema = spark.table(profile_metrics_table).schema
+    except Exception:
+        return "*"
+    fields = {f.name: f.dataType for f in schema.fields}
+    from pyspark.sql.types import StructType
+    def col(name):
+        dt = fields.get(name)
+        if isinstance(dt, StructType):
+            sub = {f.name for f in dt.fields}
+            picked = "weighted" if "weighted" in sub else next(iter(sub))
+            return f"ROUND({name}.{picked}, 4) AS {name}_{picked}"
+        return f"ROUND({name}, 4) AS {name}"
+    parts = ["window", "ROUND(accuracy_score, 4) AS accuracy"]
+    for name in ("precision", "recall", "f1_score"):
+        if name in fields:
+            parts.append(col(name))
+    if "log_loss" in fields:
+        parts.append("ROUND(log_loss, 4) AS log_loss")
+    return ",\n           ".join(parts)
+
+safe_display("model quality", f"""
+    SELECT {_quality_select()}
+    FROM {profile_metrics_table}
     WHERE column_name = 'prediction'
       AND slice_key IS NULL
       AND accuracy_score IS NOT NULL
+      AND window IS NOT NULL
     ORDER BY window
-"""))
+""")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Custom Metrics
+# MAGIC ## 9. Custom Metric: `high_risk_percentage`
 # MAGIC
-# MAGIC The `high_risk_percentage` metric we defined uses a **Jinja SQL template**. Lakehouse Monitoring evaluates it per time window, so we can track how the business-level KPI changes over time.
-# MAGIC
-# MAGIC Template: `100.0 * SUM(CASE WHEN {{prediction_col}} = 1 THEN 1 ELSE 0 END) / COUNT(*)`
-# MAGIC
-# MAGIC The `{{prediction_col}}` placeholder is automatically replaced with the monitor's configured prediction column.
+# MAGIC Jinja SQL template evaluated per window: `100.0 * SUM(CASE WHEN {{prediction_col}} = 1 THEN 1 ELSE 0 END) / COUNT(*)`. After we drift the features and re-score, the model marks more customers high-risk — the metric should climb between the 2025-07 and 2025-08 windows.
 
 # COMMAND ----------
 
-display(spark.sql(f"""
-    SELECT window, column_name, high_risk_percentage
-    FROM {catalog}.{schema}.churn_predictions_profile_metrics
+safe_display("high_risk_percentage", f"""
+    SELECT window,
+           ROUND(high_risk_percentage, 2) AS high_risk_pct
+    FROM {profile_metrics_table}
     WHERE high_risk_percentage IS NOT NULL
       AND slice_key IS NULL
+      AND column_name = ':table'
+      AND window IS NOT NULL
     ORDER BY window
-"""))
+""")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 9. Alerting & Retraining Triggers
+# MAGIC ## 10. Alerting + Dashboard
 # MAGIC
-# MAGIC In production, the monitoring pipeline looks like:
-# MAGIC
+# MAGIC In production the loop is:
 # MAGIC ```
-# MAGIC Monitor refresh (scheduled) → drift_metrics table → SQL Alert (threshold check)
-# MAGIC    → Notification (email/Slack/PagerDuty) → Workflow (retrain pipeline)
+# MAGIC Scheduled refresh → drift_metrics table → SQL Alert (threshold check)
+# MAGIC    → Notification (email / Slack / PagerDuty) → Workflow (retraining pipeline)
 # MAGIC ```
-# MAGIC
-# MAGIC Below is a **working alert query** that you'd plug into a Databricks SQL Alert.
+# MAGIC The query below is a **working alert query** — wire it into a Databricks SQL Alert with a "rows returned > 0" condition.
 
 # COMMAND ----------
 
-alert_results = spark.sql(f"""
+alert_query = f"""
     SELECT column_name, window,
-           COALESCE(population_stability_index, 0) AS psi,
-           COALESCE(ks_test.pvalue, chi_squared_test.pvalue) AS test_pvalue,
+           ROUND(COALESCE(population_stability_index, 0), 4) AS psi,
+           ROUND(COALESCE(ks_test.pvalue, chi_squared_test.pvalue), 6) AS test_pvalue,
            CASE
                WHEN COALESCE(population_stability_index, 0) > 0.2 THEN 'CRITICAL — major distribution shift'
-               WHEN COALESCE(population_stability_index, 0) > 0.1 THEN 'WARNING — moderate drift detected'
+               WHEN COALESCE(population_stability_index, 0) > 0.1 THEN 'WARNING — moderate drift'
                WHEN COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05 THEN 'ALERT — statistically significant drift'
                ELSE 'OK'
            END AS status
-    FROM {catalog}.{schema}.churn_predictions_drift_metrics
+    FROM {drift_metrics_table}
     WHERE slice_key IS NULL
+      AND window IS NOT NULL
       AND (
           COALESCE(population_stability_index, 0) > 0.1
           OR COALESCE(ks_test.pvalue, chi_squared_test.pvalue, 1) < 0.05
       )
     ORDER BY COALESCE(population_stability_index, 0) DESC
-""")
-
-display(alert_results)
-
-alert_count = alert_results.count()
-print(f"\n{'='*60}")
-print(f"  {alert_count} drift alert(s) fired across all windows")
-print(f"{'='*60}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 10. Dashboard & Next Steps
-# MAGIC
-# MAGIC Lakehouse Monitoring **auto-generates a Lakeview dashboard** with:
-# MAGIC - Profile distributions per column per window
-# MAGIC - Drift test results with color-coded thresholds
-# MAGIC - Model quality trends (when labels are present)
-# MAGIC
-# MAGIC You can share it via **scheduled PDF/email subscriptions**, embed in **Genie Spaces**, or extend with custom visualizations.
-
-# COMMAND ----------
-
-# Print dashboard location
+"""
 try:
-    info = w.quality_monitors.get(table_name=predictions_table)
-    print(f"Dashboard assets: {info.assets_dir}")
-    print(f"Dashboard ID: {info.dashboard_id}")
-    print(f"\nOpen the dashboard in your Databricks workspace to see auto-generated visualizations.")
+    alert_results = spark.sql(alert_query)
+    display(alert_results)
+    print(f"{alert_results.count()} drift alert(s) would fire across the windows above")
 except Exception as e:
-    print(f"Monitor info: {e}")
+    print(f"  ⚠ alert query: drift table not yet readable ({type(e).__name__}). Re-run once the refresh completes.")
 
 # COMMAND ----------
 
@@ -565,14 +618,14 @@ except Exception as e:
 # MAGIC
 # MAGIC | What we built | Details |
 # MAGIC |--------------|---------|
-# MAGIC | **Baseline table** | Scored training split → `churn_predictions_baseline` |
-# MAGIC | **Drift simulation** | Shifted `monthly_charges`, `total_charges`, `tenure_months`, `contract_type` |
-# MAGIC | **Monitor** | InferenceLog with monthly granularity, baseline comparison |
+# MAGIC | **Baseline table** | Scored training split → `churn_predictions_baseline` (with labels) |
+# MAGIC | **Windowed predictions** | One clean overwrite — 2025-07 (original features) + 2025-08 (drifted + re-scored) |
+# MAGIC | **Monitor** | InferenceLog, monthly granularity, baseline comparison, `label_col` set up front so model-quality metrics populate on the first refresh |
 # MAGIC | **Drift detection** | KS, chi-squared, PSI, Wasserstein, JS divergence, total variation |
-# MAGIC | **Model quality** | Accuracy, precision, recall, F1 via ground-truth label MERGE |
+# MAGIC | **Model quality** | Accuracy, precision, recall, F1 — computed automatically because `label_col` was configured |
 # MAGIC | **Custom metric** | `high_risk_percentage` — business KPI per window |
-# MAGIC | **Alerting** | SQL query with PSI/p-value thresholds → ready for SQL Alerts |
-# MAGIC | **Dashboard** | Auto-generated Lakeview dashboard |
+# MAGIC | **Alerting** | SQL query with PSI / p-value thresholds — drop into a Databricks SQL Alert |
+# MAGIC | **Dashboard** | Auto-generated Lakeview dashboard (URL printed above) |
 # MAGIC
 # MAGIC ### Databricks Lakehouse Monitoring vs. Third-Party Tools
 # MAGIC
@@ -587,12 +640,3 @@ except Exception as e:
 # MAGIC | **GenAI monitoring** | Text quality, toxicity, topic drift | Varies |
 # MAGIC | **Cost** | Serverless SQL compute for refresh | Infrastructure + license costs |
 # MAGIC | **Governance** | Unity Catalog lineage built-in | External metadata management |
-
-# COMMAND ----------
-
-# # Cleanup (uncomment to remove monitor and tables)
-# w.quality_monitors.delete(table_name=predictions_table)
-# spark.sql(f"DROP TABLE IF EXISTS {baseline_table}")
-# spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}.churn_predictions_profile_metrics")
-# spark.sql(f"DROP TABLE IF EXISTS {catalog}.{schema}.churn_predictions_drift_metrics")
-# print("Monitor and metric tables removed")

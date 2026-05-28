@@ -14,7 +14,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install lightgbm==4.6.0 mlflow==3.8.1 scikit-learn==1.6.1 -q
+# MAGIC %pip install lightgbm==4.6.0 mlflow==3.8.1 scikit-learn==1.6.1 "numpy<2" -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------

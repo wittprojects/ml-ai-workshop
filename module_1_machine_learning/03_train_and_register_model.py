@@ -19,7 +19,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk==0.102.0 optuna==4.8.0 lightgbm==4.6.0 shap==0.51.0 uv==0.10.11 -q
+# MAGIC %pip install databricks-feature-engineering==0.14.0 databricks-sdk==0.102.0 optuna==4.8.0 lightgbm==4.6.0 shap==0.46.0 "numpy<2" uv==0.10.11 -q
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
