@@ -6,7 +6,7 @@
 # MAGIC %md
 # MAGIC # Workshop Setup
 # MAGIC
-# MAGIC **Run once by the instructor** to provision data and resources.
+# MAGIC **Run this once** to provision the data and resources for the workshop.
 # MAGIC
 # MAGIC This notebook:
 # MAGIC 1. Creates the catalog and schema
@@ -227,7 +227,7 @@ except Exception as e:
 # Grant once at the schema level — UC privileges cascade to every child table,
 # view, function, registered model, and volume, including ones created later by
 # the module notebooks. Net effect: every UC asset the workshop creates is
-# automatically reachable by participants, no per-asset GRANT required.
+# automatically reachable by all workshop users, no per-asset GRANT required.
 schema_grants = [
     ("USE CATALOG",   f"CATALOG {catalog}"),
     ("USE SCHEMA",    f"SCHEMA {catalog}.{schema}"),
@@ -269,4 +269,4 @@ print(f"\n✓ All permissions granted to `account users`")
 # MAGIC | Vector Search Index | ✓ Synced |
 # MAGIC | Permissions | ✓ Granted |
 # MAGIC
-# MAGIC **Next**: Participants can now work through Module 1 and Module 2 notebooks sequentially.
+# MAGIC **Next**: Work through the Module 1 and Module 2 notebooks in order.

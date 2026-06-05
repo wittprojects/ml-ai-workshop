@@ -90,7 +90,7 @@ Always be empathetic and solution-oriented. Provide specific, actionable recomme
 # MAGIC | `llm_call_iter_N` | `SpanType.LLM` | One per think-step — captures the message list in and the tool_calls / content out |
 # MAGIC | `<tool_name>` | `SpanType.TOOL` | One per tool execution — captures args in, result out, and `tool_call_id` for cross-referencing |
 # MAGIC
-# MAGIC Result: the MLflow Trace UI renders a tree that mirrors the agent's reasoning so participants can
+# MAGIC Result: the MLflow Trace UI renders a tree that mirrors the agent's reasoning so you can
 # MAGIC interrogate exactly *what* the agent looked at, *when*, and *with what arguments*.
 
 # COMMAND ----------
@@ -254,8 +254,8 @@ print("✓ Evaluation complete")
 # MAGIC
 # MAGIC Open the experiment in the MLflow UI (sidebar → Experiments → `ml-ai-workshop-genai`), pick the
 # MAGIC `agent_eval_v1` run, and click the **Traces** tab. Each eval example produces one trace with the
-# MAGIC `react_agent` AGENT span at the root and one TOOL/LLM child per step. This is how participants
-# MAGIC will debug their own agents in production — by interrogating exactly which tools were called,
+# MAGIC `react_agent` AGENT span at the root and one TOOL/LLM child per step. This is how you
+# MAGIC debug agents in production — by interrogating exactly which tools were called,
 # MAGIC with which arguments, and what they returned.
 
 # COMMAND ----------

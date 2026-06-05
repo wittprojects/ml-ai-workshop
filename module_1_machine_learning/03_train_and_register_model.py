@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC **Time**: ~15 min
 # MAGIC
-# MAGIC We'll train a **LightGBM** classifier with **Optuna** hyperparameter tuning, tracked by **MLflow**.
+# MAGIC You'll train a **LightGBM** classifier with **Optuna** hyperparameter tuning, tracked by **MLflow**.
 # MAGIC
 # MAGIC Key concepts:
 # MAGIC - `fe.create_training_set()` for feature lineage
@@ -376,7 +376,7 @@ print(f"Best run_id saved: {final_run_id}")
 # MAGIC %md
 # MAGIC ## Summary
 # MAGIC
-# MAGIC We trained a LightGBM churn prediction model:
+# MAGIC You trained a LightGBM churn prediction model:
 # MAGIC - **Optuna** explored 20 hyperparameter combinations
 # MAGIC - All trials logged to **MLflow** with full tracking
 # MAGIC - **Feature Store** lineage preserved via `fe.create_training_set()`

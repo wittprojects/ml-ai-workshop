@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC **Time**: ~8 min
 # MAGIC
-# MAGIC We'll deploy the Champion model to a **Model Serving** endpoint and call it from a REST client.
+# MAGIC You'll deploy the Champion model to a **Model Serving** endpoint and call it from a REST client.
 # MAGIC
 # MAGIC Key concepts:
 # MAGIC - Model Serving endpoints with scale-to-zero

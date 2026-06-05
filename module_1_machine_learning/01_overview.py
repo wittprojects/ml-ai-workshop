@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC **Time**: ~5 min
 # MAGIC
-# MAGIC In this module, we'll build an end-to-end ML pipeline for **telecom customer churn prediction**:
+# MAGIC In this module, you'll build an end-to-end ML pipeline for **telecom customer churn prediction**:
 # MAGIC
 # MAGIC | Notebook | Topic |
 # MAGIC |----------|-------|

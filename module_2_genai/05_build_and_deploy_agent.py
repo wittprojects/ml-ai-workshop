@@ -147,8 +147,8 @@ print(f"It is included in the deployed app code as a VectorSearchRetrieverTool."
 # MAGIC
 # MAGIC When satisfied, click **Export** → **Export to notebook** in the Playground.
 # MAGIC
-# MAGIC The exported code uses `databricks-langchain` and `langgraph` — the same libraries our deployed app uses.
-# MAGIC Compare the export with `agent_app/agent.py` in this repo — you'll see they follow the same pattern:
+# MAGIC The exported code uses `databricks-langchain` and `langgraph` — the same libraries a deployed app uses.
+# MAGIC A deployed `agent_app/agent.py` (see the optional deploy section below) follows the same pattern:
 # MAGIC - `ChatDatabricks` for the LLM
 # MAGIC - `UCFunctionToolkit` for UC function tools
 # MAGIC - `create_react_agent` from LangGraph
@@ -164,17 +164,18 @@ print(f"It is included in the deployed app code as a VectorSearchRetrieverTool."
 # MAGIC - **Unity Catalog access** — the app can call UC functions, query tables, and use model serving
 # MAGIC - **Managed infrastructure** — no Docker, no Kubernetes, just push code
 # MAGIC
-# MAGIC > **Note**: The instructor has already deployed the agent app. You'll review the code and test the live endpoint below.
+# MAGIC > **Note**: This section walks through deploying the agent as a Databricks App. You'll review the app structure below and can optionally deploy it yourself.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Code Walkthrough
 # MAGIC
-# MAGIC The deployed app lives in `agent_app/` with four files:
+# MAGIC A Databricks App for this agent lives in an `agent_app/` directory with four files.
+# MAGIC These are a template you create — they aren't shipped in this repo:
 # MAGIC
 # MAGIC ### `agent.py` — Agent logic
-# MAGIC The same agent we prototyped in the Playground, as importable Python:
+# MAGIC The same agent you prototyped in the Playground, as importable Python:
 # MAGIC - System prompt defining the retention specialist workflow
 # MAGIC - `UCFunctionToolkit` with our 5 UC functions
 # MAGIC - `VectorSearchRetrieverTool` for knowledge base RAG (not available in Playground)
@@ -203,19 +204,22 @@ print(f"It is included in the deployed app code as a VectorSearchRetrieverTool."
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Deploy the App (Instructor Only)
+# MAGIC ## Deploy the App (Optional)
 # MAGIC
-# MAGIC The cells below show how the app is deployed. Participants can review but don't need to run these.
+# MAGIC The cells below show how to deploy the app. This step is optional and requires
+# MAGIC creating the `agent_app/` files above first (not included in this repo) and a
+# MAGIC configured Databricks CLI.
 
 # COMMAND ----------
 
-# --- Instructor-only: deploy the app ---
-# Uncomment and run to deploy (requires Databricks CLI configured)
+# --- Optional: deploy the app ---
+# Uncomment and run to deploy (requires the Databricks CLI configured and an
+# agent_app/ directory containing the files described above).
 #
 # import subprocess
 # result = subprocess.run(
-#     ["/opt/homebrew/bin/databricks", "apps", "deploy", app_name,
-#      "--source-code-path", "agent_app/", "--profile", "fevm"],
+#     ["databricks", "apps", "deploy", app_name,
+#      "--source-code-path", "agent_app/"],
 #     capture_output=True, text=True
 # )
 # print(result.stdout)

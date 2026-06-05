@@ -2,14 +2,17 @@
 # MAGIC %md
 # MAGIC # Workshop Configuration
 # MAGIC
-# MAGIC **Instructor**: Set these values before cloning for participants.
-# MAGIC All downstream notebooks reference these variables via `%run ../_resources/00_config`.
+# MAGIC Set these values before running the workshop — edit `catalog` / `schema`
+# MAGIC to point at a Unity Catalog location you can write to. All downstream
+# MAGIC notebooks reference these variables via `%run ../_resources/00_config`.
 
 # COMMAND ----------
 
 # ---- Catalog & Schema ----
-catalog = "wittprojects"
-schema = "workshop"
+# Edit these to your own Unity Catalog location. `main` exists in most
+# workspaces; if you don't have rights there, set `catalog` to one you can use.
+catalog = "main"
+schema = "churn_workshop"
 
 # ---- Foundation Model API Endpoints ----
 llm_endpoint = "databricks-claude-sonnet-4-6"
@@ -52,7 +55,7 @@ print(f"Model:              {model_name}")
 # COMMAND ----------
 
 # ---- Grant helpers ---------------------------------------------------------
-# Every asset the workshop creates needs to be readable by all participants.
+# Every asset the workshop creates needs to be readable by all workshop users.
 # UC GRANT is naturally idempotent (re-running is a no-op), so callers can
 # invoke these every run without guarding. The non-UC helpers use the
 # Permissions REST API with PATCH semantics (additive, also idempotent).

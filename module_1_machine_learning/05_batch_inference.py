@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC **Time**: ~5 min
 # MAGIC
-# MAGIC We'll score the test split of customers and write a `churn_predictions` table.
+# MAGIC You'll score the test split of customers and write a `churn_predictions` table.
 # MAGIC In Module 2 the retention agent reads this table directly (pre-computed scores pattern).
 
 # COMMAND ----------

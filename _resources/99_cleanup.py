@@ -13,10 +13,10 @@
 # MAGIC - Genie space(s) titled "Telecom Churn Analytics"
 # MAGIC - Model serving endpoint `workshop-churn-model`
 # MAGIC - Vector Search index `product_knowledge_index` and endpoint `workshop_vs_endpoint`
-# MAGIC - `DROP SCHEMA wittprojects.workshop CASCADE` — every table, view, UC function, registered model, and volume
+# MAGIC - `DROP SCHEMA <catalog>.<schema> CASCADE` — every table, view, UC function, registered model, and volume
 # MAGIC - MLflow experiments owned by the running user (`ml-ai-workshop-churn`, `ml-ai-workshop-genai`)
 # MAGIC
-# MAGIC The catalog `wittprojects` is **not** dropped (shared infra). Other participants'
+# MAGIC The catalog itself is **not** dropped (it may be shared). Other users'
 # MAGIC MLflow experiments are **not** touched (theirs to clean).
 # MAGIC
 # MAGIC Reciprocal verify notebook: `99_verify_grants.py`.
@@ -201,7 +201,7 @@ step(f"schema {catalog}.{schema} (CASCADE)", _drop_schema)
 # MAGIC %md
 # MAGIC ## 6. MLflow experiments for the running user
 # MAGIC
-# MAGIC Only wipes experiments owned by whoever runs cleanup. Each participant manages
+# MAGIC Only wipes experiments owned by whoever runs cleanup. Each user manages
 # MAGIC their own MLflow experiments.
 
 # COMMAND ----------

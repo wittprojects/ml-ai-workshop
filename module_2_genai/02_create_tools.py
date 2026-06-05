@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC **Time**: ~10 min
 # MAGIC
-# MAGIC We'll create **Unity Catalog functions** that serve as tools for our retention agent.
+# MAGIC You'll create **Unity Catalog functions** that serve as tools for the retention agent.
 # MAGIC
 # MAGIC Key concepts:
 # MAGIC - UC SQL functions as agent tools
@@ -218,7 +218,7 @@ print(results[:500])
 # MAGIC %md
 # MAGIC ## Summary
 # MAGIC
-# MAGIC We created 6 tools for the retention agent:
+# MAGIC You created 6 tools for the retention agent:
 # MAGIC
 # MAGIC | Tool | Type | Purpose |
 # MAGIC |------|------|---------|

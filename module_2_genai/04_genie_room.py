@@ -252,7 +252,7 @@ ORDER BY tickets DESC
 # MAGIC When powered by metric views, every answer uses the same governed metric definitions —
 # MAGIC no risk of "churn rate" meaning different things to different people.
 # MAGIC
-# MAGIC We'll use the **Genie Space API** (`WorkspaceClient.genie.create_space`) to create the
+# MAGIC You'll use the **Genie Space API** (`WorkspaceClient.genie.create_space`) to create the
 # MAGIC room programmatically — complete with data sources, sample questions, and instructions.
 
 # COMMAND ----------
@@ -268,7 +268,7 @@ w = WorkspaceClient()
 # MAGIC %md
 # MAGIC ### Pick a SQL warehouse
 # MAGIC
-# MAGIC Genie Rooms require a **Pro or Serverless SQL warehouse**. We'll find one automatically.
+# MAGIC Genie Rooms require a **Pro or Serverless SQL warehouse**. The cell below finds one automatically.
 
 # COMMAND ----------
 

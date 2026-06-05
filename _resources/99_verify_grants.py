@@ -4,12 +4,12 @@
 # environment_version = "5"
 # ///
 # MAGIC %md
-# MAGIC # Workshop GRANTS — Participant Verification
+# MAGIC # Workshop GRANTS — Access Verification
 # MAGIC
-# MAGIC Run this as a **participant** identity (a workspace user, or the participant
-# MAGIC service principal in the asset bundle). It exercises every asset the workshop
-# MAGIC creates with the same operations a real participant would perform. If any check
-# MAGIC fails, the corresponding grant is missing.
+# MAGIC Run this as a **regular workspace user** (not the admin identity that ran
+# MAGIC setup) to confirm the grants are correct. It exercises every asset the
+# MAGIC workshop creates with the same operations a normal user would perform. If any
+# MAGIC check fails, the corresponding grant is missing.
 
 # COMMAND ----------
 
@@ -220,7 +220,7 @@ for view in ("churn_customer_metrics", "churn_ticket_metrics", "tickets_with_cus
         lambda v=view: spark.sql(f"SELECT * FROM {catalog}.{schema}.{v} LIMIT 1").collect(),
     )
 
-# Genie space — list spaces visible to caller and look for the one we created.
+# Genie space — list spaces visible to caller and look for the one setup created.
 # w.genie.list_spaces() returns a GenieListSpacesResponse with `.spaces` and an
 # optional `.next_page_token`. Paginate until we either find the space or exhaust.
 def _genie_visible():
@@ -234,7 +234,7 @@ def _genie_visible():
         token = getattr(resp, "next_page_token", None)
         if not token:
             break
-    raise PermissionError(f"Genie space '{title}' not visible to participant")
+    raise PermissionError(f"Genie space '{title}' not visible to this user")
 
 check("CAN_RUN on Genie space 'Telecom Churn Analytics'", _genie_visible)
 
@@ -256,4 +256,4 @@ if failures:
         print(f"  ✗ {f}")
     raise AssertionError(f"{len(failures)} verification check(s) failed — see output above")
 
-print("\n✓ All workshop assets are accessible to this participant identity.")
+print("\n✓ All workshop assets are accessible to this user.")

@@ -9,9 +9,9 @@
 # MAGIC
 # MAGIC **Time**: ~15 min
 # MAGIC
-# MAGIC Build **production-grade model monitoring** using Databricks Lakehouse Monitoring. This capstone ties together everything we've built — scoring the model, detecting drift, tracking model quality, and setting up alerting.
+# MAGIC Build **production-grade model monitoring** using Databricks Lakehouse Monitoring. This capstone ties together everything you've built — scoring the model, detecting drift, tracking model quality, and setting up alerting.
 # MAGIC
-# MAGIC ### What we'll cover
+# MAGIC ### What you'll cover
 # MAGIC | Concept | What it does |
 # MAGIC |---------|-------------|
 # MAGIC | **Baseline comparison** | Compare production predictions against training-distribution baseline |
@@ -400,7 +400,7 @@ poll_for_metric_tables()
 def safe_display(label, sql):
     """Display the result of a query, but degrade gracefully if the metric table
     isn't yet readable. On a healthy refresh this is a no-op; on a slow / stuck
-    refresh it prevents the notebook from crashing so participants can still see
+    refresh it prevents the notebook from crashing so you can still see
     the dashboard URL and re-run individual cells later.
     """
     try:
@@ -616,7 +616,7 @@ except Exception as e:
 # MAGIC %md
 # MAGIC ## Summary
 # MAGIC
-# MAGIC | What we built | Details |
+# MAGIC | What you built | Details |
 # MAGIC |--------------|---------|
 # MAGIC | **Baseline table** | Scored training split → `churn_predictions_baseline` (with labels) |
 # MAGIC | **Windowed predictions** | One clean overwrite — 2025-07 (original features) + 2025-08 (drifted + re-scored) |

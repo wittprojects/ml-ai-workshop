@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC **Time**: ~10 min
 # MAGIC
-# MAGIC We'll create a **feature table** in Unity Catalog that joins customer profiles with aggregated service ticket features.
+# MAGIC You'll create a **feature table** in Unity Catalog that joins customer profiles with aggregated service ticket features.
 # MAGIC
 # MAGIC Key concepts:
 # MAGIC - Feature Engineering Client (`databricks.feature_engineering`)
@@ -38,7 +38,7 @@ fe = FeatureEngineeringClient()
 # MAGIC %md
 # MAGIC ## Build Features from Customers + Service Tickets
 # MAGIC
-# MAGIC We'll aggregate service ticket data per customer and join with customer profiles to create our feature table.
+# MAGIC You'll aggregate service ticket data per customer and join with customer profiles to create the feature table.
 
 # COMMAND ----------
 
@@ -70,7 +70,7 @@ display(ticket_features.limit(5))
 # MAGIC %md
 # MAGIC ### Count Optional Services
 # MAGIC
-# MAGIC We'll use a **Pandas UDF** to compute how many optional services each customer has enabled.
+# MAGIC You'll use a **Pandas UDF** to compute how many optional services each customer has enabled.
 
 # COMMAND ----------
 
@@ -190,7 +190,7 @@ print(f"✓ On-demand feature function created: {catalog}.{schema}.avg_price_inc
 # MAGIC %md
 # MAGIC ## Summary
 # MAGIC
-# MAGIC We created:
+# MAGIC You created:
 # MAGIC - A **feature table** (`churn_feature_table`) with customer demographics + ticket aggregates
 # MAGIC - An **on-demand feature function** (`avg_price_increase`) for dynamic computation
 # MAGIC
